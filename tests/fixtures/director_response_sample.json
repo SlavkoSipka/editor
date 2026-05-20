@@ -1,0 +1,54 @@
+{
+  "style": "TikTok UGC ad",
+  "vibe": "playful upbeat with a satisfying reveal",
+  "recommended_preset": "tiktok_viral",
+  "override_user_preset": false,
+  "override_reason": null,
+  "energy_curve": [
+    {"timestamp_sec": 0.0, "level": 0.6, "label": "snappy hook"},
+    {"timestamp_sec": 3.0, "level": 0.4, "label": "setup / dialogue"},
+    {"timestamp_sec": 7.5, "level": 0.7, "label": "build up"},
+    {"timestamp_sec": 11.0, "level": 1.0, "label": "product reveal"},
+    {"timestamp_sec": 14.0, "level": 0.5, "label": "outro / CTA"}
+  ],
+  "hook": {
+    "start_sec": 0.0,
+    "end_sec": 2.2,
+    "intent": "grab attention with snappy, playful energy",
+    "sfx_directive": "punchy transition pop on the first cut, light UI tap underneath voice"
+  },
+  "drops": [
+    {
+      "timestamp_sec": 11.0,
+      "intent": "product reveal — satisfying impact",
+      "sfx_directive": "soft riser into a bright impact + shimmer tail"
+    }
+  ],
+  "silent_regions": [
+    {
+      "start_sec": 9.5,
+      "end_sec": 11.0,
+      "reason": "build tension before the reveal — only music breath, no SFX"
+    }
+  ],
+  "outro": {
+    "start_sec": 13.0,
+    "end_sec": 15.0,
+    "intent": "resolved playful close on the logo",
+    "sfx_directive": "single soft sting with short tail, leave room for music"
+  },
+  "continuous_regions": [
+    {"start_sec": 3.0, "end_sec": 8.5, "label": "indoor setup — single soft room tone"}
+  ],
+  "anchor_moments": [
+    {"timestamp_sec": 0.0, "type": "hook_start", "description": "opening cut must have a snappy transition sound"},
+    {"timestamp_sec": 11.0, "type": "drop", "description": "product reveal — the most important sound moment"},
+    {"timestamp_sec": 13.2, "type": "logo_sting", "description": "logo appears, single playful cinematic hit"}
+  ],
+  "global_constraints": {
+    "max_sfx_count": 6,
+    "preferred_density": "sparse",
+    "music_dominance": "balanced",
+    "sfx_style": "ugc"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "scene_index": 0,
+  "scene_description": "A person walks across a hardwood floor and pushes an interior door open into a sunlit room.",
+  "mood": "tense",
+  "environment": "indoor_apartment",
+  "actions": [
+    {
+      "timestamp_in_scene": 0.42,
+      "type": "footstep_wood",
+      "description": "single footstep on wooden floor",
+      "intensity": "soft",
+      "confidence": 0.78
+    },
+    {
+      "timestamp_in_scene": 1.85,
+      "type": "door_open",
+      "description": "interior door pushed open with light creak",
+      "intensity": "medium",
+      "confidence": 0.71
+    },
+    {
+      "timestamp_in_scene": 2.30,
+      "type": "whoosh_transition",
+      "description": "fast camera whoosh as the shot pans",
+      "intensity": "sharp",
+      "confidence": 0.65
+    }
+  ],
+  "ambient_suggestion": "quiet_room_tone"
+}

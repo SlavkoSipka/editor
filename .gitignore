@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+venv/
+.venv/
+data/library/
+data/embeddings/
+data/temp/
+logs/
+.DS_Store
+*.log
+tests/sample_videos/*.mp4
