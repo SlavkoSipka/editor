@@ -11,6 +11,20 @@ mkdir -p "$DATA_DIR/api_results"
 mkdir -p "$DATA_DIR/temp"
 mkdir -p "$DATA_DIR/logs"
 
+# Cloudflare R2 → volume (when env set). Skip if manifest exists unless R2_SYNC_FORCE=1.
+if [ -n "${R2_BUCKET:-}" ] && [ -n "${R2_ENDPOINT_URL:-}" ] && \
+   [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
+  if [ ! -f "$DATA_DIR/library/manifest.json" ] || [ "${R2_SYNC_FORCE:-}" = "1" ]; then
+    echo "R2: syncing library/ and embeddings/ into \$DATA_DIR (first boot or R2_SYNC_FORCE=1)..."
+    python -m src.utils.r2_sync --prefix library --dest "$DATA_DIR/library"
+    python -m src.utils.r2_sync --prefix embeddings --dest "$DATA_DIR/embeddings"
+  else
+    echo "R2: credentials set; library already on volume — skipping sync (set R2_SYNC_FORCE=1 to re-sync)."
+  fi
+else
+  echo "R2: missing R2_* env — skipping object sync (use image bootstrap or mount data)."
+fi
+
 # Seed persistent volume from image bootstrap (first boot on Railway).
 if [ ! -f "$DATA_DIR/library/manifest.json" ] && [ -f "/app/bootstrap/library/manifest.json" ]; then
   echo "Seeding library from image bootstrap..."

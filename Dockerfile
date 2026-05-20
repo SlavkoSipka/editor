@@ -24,9 +24,11 @@ COPY src/ ./src/
 COPY api/ ./api/
 COPY process.py .
 
-# Baked library + embeddings cache (Strategy 1 — large image; omit dirs locally if needed).
-COPY data/library/ /app/bootstrap/library/
-COPY data/embeddings/ /app/bootstrap/embeddings/
+# Optional local bake: uncomment if your build context has data/ (not on clean GitHub CI).
+# COPY data/library/ /app/bootstrap/library/
+# COPY data/embeddings/ /app/bootstrap/embeddings/
+RUN mkdir -p /app/bootstrap/library /app/bootstrap/embeddings
+
 COPY tests/fixtures/ ./tests/fixtures/
 
 ENV DATA_DIR=/data

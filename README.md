@@ -142,6 +142,11 @@ Poll until `status` is `done`, then download `video_url` / `project_zip_url` fro
 | `FREESOUND_API_KEY` | Required by `config.py` at import (set a placeholder if unused). |
 | `ALLOWED_ORIGINS` | Comma-separated CORS origins; use `*` locally, your Vercel URL in production. |
 | `PORT` | Uvicorn listen port (Railway often injects this). |
+| `R2_ENDPOINT_URL` | Optional — Cloudflare R2 S3 API endpoint (`https://….r2.cloudflarestorage.com`). |
+| `R2_ACCESS_KEY_ID` | R2 API token access key. |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret. |
+| `R2_BUCKET` | Bucket name (objects under prefixes `library/` and `embeddings/`). |
+| `R2_SYNC_FORCE` | Set `1` to re-download library + embeddings even if `manifest.json` already exists on the volume. |
 
 ## Cloud deployment
 
@@ -156,9 +161,10 @@ Single Docker image: **FastAPI + Qdrant binary** in one container; Qdrant storag
    - `DATA_DIR=/data`
    - `GEMINI_API_KEY=…`
    - `FREESOUND_API_KEY=…`
-   - `ALLOWED_ORIGINS=https://your-app.vercel.app` (comma-separated if multiple; omit or use `*` only for testing)
+   - `ALLOWED_ORIGINS=https://your-app.netlify.app` (your frontend URL; comma-separated if multiple)
+   - **R2 (recommended for deploy from GitHub):** `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` — same prefixes as `aws s3 sync`: `library/`, `embeddings/`
 5. **Volumes** → add a volume mounted at **`/data`** (e.g. 8–32 GB depending on library size).
-6. Deploy. First boot may take a while: the entrypoint seeds `/data` from baked-in `bootstrap/` copies when empty, starts Qdrant, then runs SFX/music embedders only if collections have zero points (fast path when `embeddings.json` + Qdrant raft files were baked in).
+6. Deploy. **First boot** can take a long time if R2 sync runs (large library) — healthcheck allows up to **300s** in `railway.json`. After data is on the volume, restarts are faster. The entrypoint: optional **R2 sync** → optional **image bootstrap** copy → Qdrant → embedders only if collections are empty.
 7. Copy the public **HTTPS URL** for the service (e.g. `https://your-api.up.railway.app`).
 
 ### Frontend (Vercel)
@@ -169,17 +175,13 @@ Single Docker image: **FastAPI + Qdrant binary** in one container; Qdrant storag
 4. Optionally edit `web/.env.production` as a template only — Vercel env vars override at build time.
 5. Deploy and open the Vercel URL.
 
-### Shipping the sound library (Strategy 1 — bake into image)
+### Sound library: R2 (default for Railway + GitHub)
 
-For an internal MVP, this repo’s **`Dockerfile` copies `data/library/` and `data/embeddings/` into the image** as `/app/bootstrap/…`. The runtime entrypoint copies them onto the Railway volume when `/data` is still empty. That makes the Docker **build** large and slow (expect **10–30+ minutes** and several GB of context) but keeps cold starts predictable.
+The Docker image **does not** copy `data/library` or `data/embeddings` from the repo (they are not on GitHub). On first boot, if all `R2_*` variables are set, `docker-entrypoint.sh` runs `python -m src.utils.r2_sync` to download **`s3://$R2_BUCKET/library/`** → `$DATA_DIR/library/` and **`embeddings/`** → `$DATA_DIR/embeddings/`. Upload locally with `aws s3 sync` using the same prefixes.
 
-**Before `docker build` / Railway build:** ensure your machine has `data/library/manifest.json` and a populated `data/embeddings/` (including Qdrant files if you already indexed locally).
+### Optional: bake into the image
 
-**Later:** move the library to object storage (e.g. R2) and sync on boot to shrink the image — not part of this step.
-
-### Library bootstrap (without baking)
-
-If you **exclude** library/embeddings from the image (custom Dockerfile), populate `/data/library` and `/data/embeddings` via Railway shell, rsync, or a one-off sync — then restart so Qdrant sees the files.
+Uncomment the two `COPY data/...` lines in the `Dockerfile` and build where those folders exist; the entrypoint still copies from `/app/bootstrap/` to `$DATA_DIR` when the volume is empty.
 
 ### Verify Docker locally
 
