@@ -248,6 +248,27 @@ def _dir_size_bytes(path: Path) -> int:
     return total
 
 
+@app.get("/debug/logs")
+def debug_logs(lines: int = 80) -> dict:
+    """Tail /tmp/qdrant.log and /tmp/bootstrap.log so we can diagnose
+    startup failures (corrupt WAL, port conflicts, OOM, etc.) without a
+    container shell."""
+    out: dict[str, object] = {"ok": True}
+    for name, path in (("qdrant", "/tmp/qdrant.log"), ("bootstrap", "/tmp/bootstrap.log")):
+        p = Path(path)
+        if not p.is_file():
+            out[name] = f"(missing: {path})"
+            continue
+        try:
+            text = p.read_text(errors="replace").splitlines()
+            tail = text[-max(1, lines):]
+            out[name] = "\n".join(tail)
+            out[f"{name}_size_bytes"] = p.stat().st_size
+        except Exception as exc:
+            out[name] = f"(read failed: {exc})"
+    return out
+
+
 @app.get("/debug/disk")
 def debug_disk() -> dict:
     """Per-directory disk usage under $DATA_DIR. Helps diagnose volume fill-ups."""
