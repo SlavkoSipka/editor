@@ -123,6 +123,118 @@ def list_recent_jobs(limit: int = 20) -> list[JobInfo]:
     return list_jobs(limit=limit)
 
 
+@app.get("/debug/collections")
+def debug_collections() -> dict:
+    """Show all Qdrant collections and their point counts. Diagnostics only."""
+    try:
+        client = get_qdrant_client()
+        collections = client.get_collections().collections
+        result: list[dict] = []
+        for col in collections:
+            try:
+                info = client.get_collection(col.name)
+                vectors_cfg = getattr(info.config.params, "vectors", None)
+                vector_size = getattr(vectors_cfg, "size", None)
+                result.append({
+                    "name": col.name,
+                    "points_count": info.points_count,
+                    "status": str(info.status),
+                    "vector_size": vector_size,
+                })
+            except Exception as exc:
+                result.append({"name": col.name, "error": str(exc)})
+        return {
+            "qdrant_connected": True,
+            "collection_count": len(result),
+            "collections": result,
+        }
+    except Exception as exc:
+        return {"qdrant_connected": False, "error": str(exc)}
+
+
+@app.get("/debug/library")
+def debug_library() -> dict:
+    """Show storage mode, R2 config presence, and local cache stats."""
+    try:
+        from src.config import DATA_DIR, STORAGE_MODE
+
+        cache_dir = DATA_DIR / "sound_cache"
+        cache_files = list(cache_dir.glob("*")) if cache_dir.exists() else []
+        cache_size_mb = sum(
+            f.stat().st_size for f in cache_files if f.is_file()
+        ) / 1024 / 1024
+
+        manifest_path = LIBRARY_DIR / "manifest.json"
+        music_manifest_path = LIBRARY_DIR / "music" / "manifest.json"
+
+        return {
+            "storage_mode": STORAGE_MODE,
+            "r2_endpoint_set": bool(os.environ.get("R2_ENDPOINT_URL")),
+            "r2_bucket": os.environ.get("R2_BUCKET", "(not set)"),
+            "sound_cache_files": len(cache_files),
+            "sound_cache_size_mb": round(cache_size_mb, 1),
+            "data_dir": str(DATA_DIR),
+            "library_dir": str(LIBRARY_DIR),
+            "sfx_manifest_exists": manifest_path.is_file(),
+            "music_manifest_exists": music_manifest_path.is_file(),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.get("/debug/music-test")
+def debug_music_test() -> dict:
+    """Try a sample music search to see if the music_library collection works."""
+    try:
+        from src.library.music_embedder import MUSIC_COLLECTION_NAME
+        from src.library.vector_store import search_by_text
+
+        client = get_qdrant_client()
+        collections = [c.name for c in client.get_collections().collections]
+        if MUSIC_COLLECTION_NAME not in collections:
+            return {
+                "ok": False,
+                "reason": f"{MUSIC_COLLECTION_NAME} collection does not exist in Qdrant",
+                "available_collections": collections,
+            }
+
+        info = client.get_collection(MUSIC_COLLECTION_NAME)
+        if info.points_count == 0:
+            return {
+                "ok": False,
+                "reason": f"{MUSIC_COLLECTION_NAME} collection exists but has 0 points",
+            }
+
+        try:
+            results = search_by_text(
+                client,
+                MUSIC_COLLECTION_NAME,
+                "energetic upbeat background music",
+                top_k=3,
+            )
+            return {
+                "ok": True,
+                "music_points": info.points_count,
+                "sample_search_results": [
+                    {
+                        "id": r.get("id"),
+                        "name": (r.get("payload") or {}).get("name")
+                            or (r.get("payload") or {}).get("sound_name"),
+                        "score": round(float(r.get("score", 0.0)), 3),
+                    }
+                    for r in results
+                ],
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": f"music search failed: {exc}",
+                "music_points": info.points_count,
+            }
+    except Exception as exc:
+        return {"ok": False, "reason": f"debug failed: {exc}"}
+
+
 @app.get("/jobs/{job_id}/download/{filename}")
 def download_result(job_id: str, filename: str) -> FileResponse:
     job = get_job(job_id)
