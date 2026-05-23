@@ -71,33 +71,59 @@ def _local_path_for(stored: str) -> Path | None:
     return fallback if fallback.exists() else None
 
 
+def resolve_sound_path_with_status(
+    match: dict[str, Any],
+) -> tuple[Path | None, str, str | None]:
+    """Like :func:`resolve_sound_path` but also returns a status + optional note.
+
+    Status values:
+
+    * ``"local"``  — file found on local disk (no fetch needed)
+    * ``"cached"`` — already in the R2 LRU cache from a previous fetch
+    * ``"fetched"`` — downloaded from R2 just now
+    * ``"missing_path"`` — match has no usable ``sound_path``
+    * ``"no_r2_key"``    — stored path doesn't look like a library asset
+    * ``"failed"``       — local lookup miss + R2 fetch failed (or local-only miss)
+    """
+    stored = _stored_path(match)
+    if not stored:
+        return None, "missing_path", "no sound_path / local_path in match"
+
+    if STORAGE_MODE != "r2":
+        path = _local_path_for(stored)
+        if path is None:
+            logger.warning("Sound not found locally: %s", stored)
+            return None, "failed", f"local file missing: {stored}"
+        return path, "local", None
+
+    path = _local_path_for(stored)
+    if path is not None:
+        return path, "local", None
+
+    from src.library.r2_fetch import _cache_path_for, fetch_sound
+
+    r2_key = _r2_key_for(stored)
+    if r2_key is None:
+        logger.warning("Cannot derive R2 key from stored path: %s", stored)
+        return None, "no_r2_key", f"unrecognised path: {stored}"
+
+    cache_path = _cache_path_for(r2_key)
+    already_cached = cache_path.exists() and cache_path.stat().st_size > 0
+
+    path = fetch_sound(r2_key)
+    if path is None:
+        return None, "failed", f"R2 fetch failed: {r2_key}"
+    return path, ("cached" if already_cached else "fetched"), None
+
+
 def resolve_sound_path(match: dict[str, Any]) -> Path | None:
     """Return a usable local file path for the sound referenced by ``match``.
 
     Pure local lookup in local mode; falls back to R2 fetch in r2 mode.
     Returns ``None`` if the sound can't be obtained.
     """
-    stored = _stored_path(match)
-    if not stored:
-        return None
-
-    if STORAGE_MODE != "r2":
-        path = _local_path_for(stored)
-        if path is None:
-            logger.warning("Sound not found locally: %s", stored)
-        return path
-
-    path = _local_path_for(stored)
-    if path is not None:
-        return path
-
-    from src.library.r2_fetch import fetch_sound
-
-    r2_key = _r2_key_for(stored)
-    if r2_key is None:
-        logger.warning("Cannot derive R2 key from stored path: %s", stored)
-        return None
-    return fetch_sound(r2_key)
+    path, _status, _note = resolve_sound_path_with_status(match)
+    return path
 
 
 def _iter_match_stored_paths(match_plan: dict[str, Any]) -> Iterable[str]:

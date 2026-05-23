@@ -13,6 +13,7 @@ from src.config import TEMP_DIR
 from src.library.sound_resolver import (
     prefetch_match_plan_sounds,
     resolve_sound_path,
+    resolve_sound_path_with_status,
 )
 from src.preprocessing.speech_detector import (
     coverage_ratio,
@@ -393,16 +394,25 @@ def _build_music_bed(
     music_meta = match_plan.get("music")
     if not music_meta:
         return None, 0.0
-    music_path = resolve_sound_path(music_meta)
+    music_path, music_status, music_note = resolve_sound_path_with_status(music_meta)
+    music_meta["fetch_status"] = music_status
+    if music_note:
+        music_meta["fetch_note"] = music_note
     if music_path is None:
+        music_meta["included_in_mix"] = False
         logger.warning(
-            "Music track unavailable: %s", music_meta.get("sound_path", ""),
+            "Music track unavailable (%s): %s",
+            music_status, music_meta.get("sound_path", ""),
         )
         return None, 0.0
     music = load_sfx_safely(music_path, max_duration_ms=_MAX_MUSIC_DURATION_MS)
     if music is None or len(music) == 0:
+        music_meta["fetch_status"] = "load_failed"
+        music_meta["fetch_note"] = f"pydub could not load {music_path}"
+        music_meta["included_in_mix"] = False
         logger.warning("Music track unavailable: %s", music_path)
         return None, 0.0
+    music_meta["included_in_mix"] = True
 
     effective_volume_db = float(preset.music_volume_db)
     ceiling = (
@@ -530,16 +540,24 @@ def mix_audio(
     )
 
     for match in matches:
-        sound_path = resolve_sound_path(match)
+        sound_path, fetch_status, fetch_note = resolve_sound_path_with_status(match)
+        match["fetch_status"] = fetch_status
+        if fetch_note:
+            match["fetch_note"] = fetch_note
         if sound_path is None:
+            match["included_in_mix"] = False
             logger.warning(
-                "Skipping match — sound unavailable: %s",
+                "Skipping match — sound unavailable (%s): %s",
+                fetch_status,
                 match.get("sound_name") or match.get("sound_path"),
             )
             skipped += 1
             continue
         seg = load_sfx_safely(sound_path)
         if seg is None:
+            match["fetch_status"] = "load_failed"
+            match["fetch_note"] = f"pydub could not load {sound_path}"
+            match["included_in_mix"] = False
             skipped += 1
             continue
 
@@ -550,7 +568,10 @@ def mix_audio(
             )
             if ok:
                 ambient_count += 1
+                match["included_in_mix"] = True
             else:
+                match["included_in_mix"] = False
+                match.setdefault("fetch_note", "ambient overlay rejected (zero scene)")
                 skipped += 1
         else:
             master, ok = _overlay_sfx(
@@ -562,7 +583,10 @@ def mix_audio(
             )
             if ok:
                 sfx_count += 1
+                match["included_in_mix"] = True
             else:
+                match["included_in_mix"] = False
+                match.setdefault("fetch_note", "SFX overlay rejected (out of range)")
                 skipped += 1
 
     if has_speech and ambient_count > 0:
@@ -604,6 +628,26 @@ def mix_audio(
         "skipped": skipped,
         "music_volume_db": music_db_used if music_bed is not None else None,
         "original_volume_db": orig_db,
+    }
+
+    all_matches = match_plan.get("matches", []) or []
+    attempts = sum(1 for m in all_matches if "fetch_status" in m)
+    failures = sum(
+        1 for m in all_matches
+        if m.get("fetch_status") in ("failed", "load_failed", "no_r2_key", "missing_path")
+    )
+    fetched = sum(1 for m in all_matches if m.get("fetch_status") == "fetched")
+    cached = sum(1 for m in all_matches if m.get("fetch_status") == "cached")
+    music_status = None
+    music_meta = match_plan.get("music") or {}
+    if music_meta:
+        music_status = music_meta.get("fetch_status", "unknown")
+    match_plan["fetch_stats"] = {
+        "attempts": attempts,
+        "failures": failures,
+        "fetched": fetched,
+        "cached": cached,
+        "music_status": music_status,
     }
     return output_path
 

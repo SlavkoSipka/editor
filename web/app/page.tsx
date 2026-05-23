@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getJob, getPresets, submitJob, type JobInfo, type Preset } from "@/lib/api";
+import {
+  getJob,
+  getPresets,
+  submitJob,
+  type JobInfo,
+  type Preset,
+  type UploadProgress,
+} from "@/lib/api";
 import { UploadZone } from "@/components/UploadZone";
 import { PresetGrid } from "@/components/PresetGrid";
-import { JobProgress } from "@/components/JobProgress";
+import { JobProgress, type GenerationPhase } from "@/components/JobProgress";
 import { JobResult } from "@/components/JobResult";
+import { DiagnosticsPanel } from "@/components/DiagnosticsPanel";
 import { Sparkles } from "lucide-react";
 
 export default function Home() {
@@ -13,7 +21,9 @@ export default function Home() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<JobInfo | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [phase, setPhase] = useState<GenerationPhase | "idle">("idle");
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [activeFile, setActiveFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -49,26 +59,50 @@ export default function Home() {
     };
   }, [job?.job_id, job?.status]);
 
+  useEffect(() => {
+    if (!job) return;
+    if (job.status === "done") {
+      setPhase("done");
+    } else if (job.status === "failed") {
+      setPhase("failed");
+    } else if (phase !== "uploading") {
+      setPhase("processing");
+    }
+  }, [job?.status, job, phase]);
+
   async function handleGenerate() {
     if (!file || !selectedPreset) return;
-    setSubmitting(true);
     setError(null);
     setJob(null);
+    setUploadProgress({ loadedBytes: 0, totalBytes: file.size, pct: 0 });
+    setActiveFile(file);
+    setPhase("uploading");
+
     try {
-      const newJob = await submitJob(file, selectedPreset);
+      const newJob = await submitJob(file, selectedPreset, (progress) => {
+        setUploadProgress(progress);
+      });
+      setUploadProgress((prev) =>
+        prev ? { ...prev, loadedBytes: prev.totalBytes, pct: 100 } : null,
+      );
       setJob(newJob);
+      setPhase("processing");
     } catch (e: unknown) {
+      setPhase("failed");
       setError(e instanceof Error ? e.message : "Upload failed");
-    } finally {
-      setSubmitting(false);
     }
   }
 
   function reset() {
     setJob(null);
     setFile(null);
+    setActiveFile(null);
+    setUploadProgress(null);
+    setPhase("idle");
     setError(null);
   }
+
+  const showForm = phase === "idle";
 
   return (
     <main className="min-h-screen px-4 py-12">
@@ -84,7 +118,7 @@ export default function Home() {
           </p>
         </div>
 
-        {!job && (
+        {showForm && (
           <>
             <section className="space-y-3">
               <div className="text-sm text-neutral-500 font-medium">1 — Upload video</div>
@@ -104,22 +138,33 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handleGenerate}
-                disabled={!file || !selectedPreset || submitting}
+                disabled={!file || !selectedPreset}
                 className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-800 disabled:text-neutral-600 disabled:cursor-not-allowed font-medium transition"
               >
-                {submitting ? "Uploading…" : "Generate"}
+                Generate
               </button>
               {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
             </section>
           </>
         )}
 
-        {job && (
+        {phase !== "idle" && (
           <section className="space-y-6">
-            <JobProgress job={job} />
-            <JobResult job={job} />
+            <JobProgress
+              phase={phase}
+              job={job}
+              upload={uploadProgress}
+              fileName={activeFile?.name}
+              uploadError={phase === "failed" && !job ? error : null}
+            />
+            {job && <JobResult job={job} />}
 
-            {(job.status === "done" || job.status === "failed") && (
+            {job?.diagnostics &&
+              (job.status === "done" || job.status === "failed") && (
+                <DiagnosticsPanel diagnostics={job.diagnostics} />
+              )}
+
+            {(phase === "done" || phase === "failed") && (
               <button
                 type="button"
                 onClick={reset}
