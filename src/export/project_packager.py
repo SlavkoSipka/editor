@@ -12,6 +12,10 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from src.library.sound_resolver import (
+    prefetch_match_plan_sounds,
+    resolve_sound_path,
+)
 from src.utils.logger import get_logger
 
 logger = get_logger("project_packager")
@@ -99,6 +103,8 @@ def package_project(
         shutil.rmtree(staging_root)
     staging.mkdir(parents=True)
 
+    prefetch_match_plan_sounds(match_plan)
+
     _safe_copy(output_path, staging / "final.mp4")
     _safe_copy(original_video_path, staging / "original.mp4")
     _safe_copy(original_audio_path, staging / "original_audio.wav")
@@ -117,8 +123,13 @@ def package_project(
 
     music = match_plan.get("music") or None
     if music and music.get("sound_path"):
-        music_src = Path(music["sound_path"])
-        _safe_copy(music_src, music_dir / music_src.name)
+        music_src = resolve_sound_path(music)
+        if music_src is not None:
+            _safe_copy(music_src, music_dir / music_src.name)
+        else:
+            logger.warning(
+                "Music asset unavailable, skipping: %s", music.get("sound_path"),
+            )
 
     seen_ids: set[Any] = set()
     for match in match_plan.get("matches") or []:
@@ -126,9 +137,11 @@ def package_project(
         if sid is None or sid in seen_ids:
             continue
         seen_ids.add(sid)
-        src = Path(match.get("sound_path") or "")
-        if not src.is_file():
-            logger.warning("Match asset missing, skipping: %s", src)
+        src = resolve_sound_path(match)
+        if src is None or not src.is_file():
+            logger.warning(
+                "Match asset missing, skipping: %s", match.get("sound_path"),
+            )
             continue
         subdir = ambient_dir if match.get("layer") == "ambient" else sfx_dir
         _safe_copy(src, subdir / src.name)

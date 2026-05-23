@@ -21,6 +21,14 @@ TEMP_DIR: Path = DATA_DIR / "temp"
 LOGS_DIR: Path = DATA_DIR / "logs"
 FIXTURES_DIR: Path = PROJECT_ROOT / "tests" / "fixtures"
 
+# Storage mode for sound files:
+#   "local" — full library on disk (dev machines, baked images)
+#   "r2"    — sounds fetched on-demand from Cloudflare R2 into SOUND_CACHE_DIR
+#             (used on Railway Hobby where the 5 GB volume can't hold the full library)
+STORAGE_MODE: str = os.environ.get("STORAGE_MODE", "local").strip().lower() or "local"
+SOUND_CACHE_DIR: Path = DATA_DIR / "sound_cache"
+SOUND_CACHE_MAX_MB: int = int(os.environ.get("SOUND_CACHE_MAX_MB", "1500"))
+
 
 def _require_env(name: str) -> str:
     value = os.getenv(name)
@@ -37,5 +45,5 @@ FREESOUND_API_KEY: str = _require_env("FREESOUND_API_KEY")
 
 
 def ensure_dirs() -> None:
-    for directory in (LIBRARY_DIR, EMBEDDINGS_DIR, TEMP_DIR, LOGS_DIR):
+    for directory in (LIBRARY_DIR, EMBEDDINGS_DIR, TEMP_DIR, LOGS_DIR, SOUND_CACHE_DIR):
         directory.mkdir(parents=True, exist_ok=True)

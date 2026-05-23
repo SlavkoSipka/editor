@@ -194,6 +194,8 @@ def embed_library(
 
 
 def _main() -> None:
+    import argparse
+
     from src.library.vector_store import (
         COLLECTION_NAME,
         create_collection,
@@ -201,6 +203,28 @@ def _main() -> None:
         index_sounds,
         search_by_text,
     )
+
+    parser = argparse.ArgumentParser(
+        description="Embed the library and index it into Qdrant.",
+    )
+    parser.add_argument(
+        "--from-cache",
+        action="store_true",
+        help=(
+            "Refuse to compute embeddings from manifests; require the cached "
+            "embeddings.json (used in R2 / small-volume mode where audio files "
+            "live on R2 and never touch the disk)."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.from_cache:
+        cache_path = EMBEDDINGS_DIR / "embeddings.json"
+        if not cache_path.is_file():
+            raise RuntimeError(
+                f"--from-cache requires {cache_path} but it does not exist. "
+                "Pre-compute embeddings locally and upload them to R2 first."
+            )
 
     sounds = embed_library()
     print(f"Embedded {len(sounds)} sounds")

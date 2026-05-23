@@ -147,6 +147,8 @@ Poll until `status` is `done`, then download `video_url` / `project_zip_url` fro
 | `R2_SECRET_ACCESS_KEY` | R2 API token secret. |
 | `R2_BUCKET` | Bucket name (objects under prefixes `library/` and `embeddings/`). |
 | `R2_SYNC_FORCE` | Set `1` to re-download library + embeddings even if `manifest.json` already exists on the volume. |
+| `STORAGE_MODE` | `local` (default) keeps the full library on disk; `r2` fetches sounds on demand into a small LRU cache (use on Railway Hobby's 5 GB volume). |
+| `SOUND_CACHE_MAX_MB` | LRU cap for the on-demand sound cache (default `1500`). |
 
 ## Evaluation
 
@@ -186,8 +188,10 @@ Single Docker image: **FastAPI + Qdrant binary** in one container; Qdrant storag
    - `FREESOUND_API_KEY=…`
    - `ALLOWED_ORIGINS=https://your-app.netlify.app` (your frontend URL; comma-separated if multiple)
    - **R2 (recommended for deploy from GitHub):** `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` — same prefixes as `aws s3 sync`: `library/`, `embeddings/`
-5. **Volumes** → add a volume mounted at **`/data`** (e.g. 8–32 GB depending on library size).
-6. Deploy. **First boot** can take a long time if R2 sync runs (large library) — healthcheck allows up to **300s** in `railway.json`. After data is on the volume, restarts are faster. The entrypoint: optional **R2 sync** → optional **image bootstrap** copy → Qdrant → embedders only if collections are empty.
+5. **Volumes** → add a volume mounted at **`/data`**. Two profiles:
+   - **Full library on volume** (any plan ≥ 32 GB): 8–32 GB volume, leave `STORAGE_MODE` unset (defaults to `local`). First boot syncs the whole library from R2.
+   - **Small volume / on-demand R2 fetch** (Railway Hobby, 5 GB cap): add `STORAGE_MODE=r2`. Only the Qdrant index + a ~1.5 GB LRU sound cache occupy the volume; individual sounds are pulled from R2 on demand and cached. Total footprint stays around 3–4 GB.
+6. Deploy. The entrypoint starts FastAPI immediately and runs bootstrap (R2 sync + Qdrant indexing) in the background, so `/health` returns 200 within seconds and Railway's healthcheck passes even on first boot. Indexing progress logs to `/tmp/bootstrap.log`.
 7. Copy the public **HTTPS URL** for the service (e.g. `https://your-api.up.railway.app`).
 
 ### Frontend (Vercel)
@@ -200,7 +204,12 @@ Single Docker image: **FastAPI + Qdrant binary** in one container; Qdrant storag
 
 ### Sound library: R2 (default for Railway + GitHub)
 
-The Docker image **does not** copy `data/library` or `data/embeddings` from the repo (they are not on GitHub). On first boot, if all `R2_*` variables are set, `docker-entrypoint.sh` runs `python -m src.utils.r2_sync` to download **`s3://$R2_BUCKET/library/`** → `$DATA_DIR/library/` and **`embeddings/`** → `$DATA_DIR/embeddings/`. Upload locally with `aws s3 sync` using the same prefixes.
+The Docker image **does not** copy `data/library` or `data/embeddings` from the repo (they are not on GitHub). On first boot, if all `R2_*` variables are set, `docker-entrypoint.sh` pulls the data from R2:
+
+- `STORAGE_MODE=local` (default) — `python -m src.utils.r2_sync` mirrors **`s3://$R2_BUCKET/library/`** → `$DATA_DIR/library/` and **`embeddings/`** → `$DATA_DIR/embeddings/`. Suitable when the volume is big enough for the whole library.
+- `STORAGE_MODE=r2` — only `embeddings/` and `library/manifest.json` are pulled (small). Individual sound files are fetched on demand at job time via `src/library/r2_fetch.py` into `$DATA_DIR/sound_cache/` and evicted LRU. Suitable for Railway Hobby's 5 GB volume.
+
+Upload your library to R2 with `aws s3 sync` using the same prefixes (`library/`, `embeddings/`).
 
 ### Optional: bake into the image
 

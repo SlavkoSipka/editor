@@ -9,7 +9,11 @@ import numpy as np
 import pyloudnorm
 from pydub import AudioSegment
 
-from src.config import PROJECT_ROOT, TEMP_DIR
+from src.config import TEMP_DIR
+from src.library.sound_resolver import (
+    prefetch_match_plan_sounds,
+    resolve_sound_path,
+)
 from src.preprocessing.speech_detector import (
     coverage_ratio,
     detect_speech_regions,
@@ -125,11 +129,6 @@ def normalize_loudness(
         measured_lufs, target_lufs, gain_delta_db,
     )
     return audio_segment + gain_delta_db
-
-
-def _resolve_sound_path(raw: str) -> Path:
-    p = Path(raw)
-    return p if p.is_absolute() else PROJECT_ROOT / p
 
 
 def normalize_sfx_to_peak(
@@ -394,7 +393,12 @@ def _build_music_bed(
     music_meta = match_plan.get("music")
     if not music_meta:
         return None, 0.0
-    music_path = _resolve_sound_path(music_meta.get("sound_path", ""))
+    music_path = resolve_sound_path(music_meta)
+    if music_path is None:
+        logger.warning(
+            "Music track unavailable: %s", music_meta.get("sound_path", ""),
+        )
+        return None, 0.0
     music = load_sfx_safely(music_path, max_duration_ms=_MAX_MUSIC_DURATION_MS)
     if music is None or len(music) == 0:
         logger.warning("Music track unavailable: %s", music_path)
@@ -470,6 +474,8 @@ def mix_audio(
     if not original_audio_path.is_file():
         raise FileNotFoundError(f"Original audio not found: {original_audio_path}")
 
+    prefetch_match_plan_sounds(match_plan)
+
     original = AudioSegment.from_file(original_audio_path)
     total_duration_ms = len(original)
     total_duration_sec = total_duration_ms / 1000.0
@@ -524,7 +530,14 @@ def mix_audio(
     )
 
     for match in matches:
-        sound_path = _resolve_sound_path(match.get("sound_path", ""))
+        sound_path = resolve_sound_path(match)
+        if sound_path is None:
+            logger.warning(
+                "Skipping match — sound unavailable: %s",
+                match.get("sound_name") or match.get("sound_path"),
+            )
+            skipped += 1
+            continue
         seg = load_sfx_safely(sound_path)
         if seg is None:
             skipped += 1
