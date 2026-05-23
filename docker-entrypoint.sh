@@ -13,6 +13,16 @@ mkdir -p "$DATA_DIR/temp"
 mkdir -p "$DATA_DIR/logs"
 mkdir -p "$DATA_DIR/sound_cache"
 
+# QDRANT_RESET=1 wipes incompatible/corrupt collection files before Qdrant
+# starts. Useful one-shot recovery via Railway env vars when the Qdrant binary
+# crashes at startup (e.g., version mismatch from a prior R2 sync). Toggle it
+# off again after a successful boot.
+if [ "${QDRANT_RESET:-}" = "1" ]; then
+  echo "QDRANT_RESET=1 — clearing \$DATA_DIR/embeddings/collections and .indexed"
+  rm -rf "$DATA_DIR/embeddings/collections"
+  rm -f  "$DATA_DIR/embeddings/.indexed"
+fi
+
 echo "Starting Qdrant (storage = \$DATA_DIR/embeddings, STORAGE_MODE=$STORAGE_MODE)..."
 QDRANT__STORAGE__STORAGE_PATH="$DATA_DIR/embeddings" \
 QDRANT__SERVICE__HTTP_PORT=6333 \
