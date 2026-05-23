@@ -1,15 +1,52 @@
 "use client";
 
 import type { JobInfo } from "@/lib/api";
-import { Download, Music } from "lucide-react";
+import { Download, Loader2, Music } from "lucide-react";
+import { useState } from "react";
 
 type Props = { job: JobInfo };
 
+type DownloadKey = "mp4" | "zip";
+
 export function JobResult({ job }: Props) {
+  const [downloading, setDownloading] = useState<DownloadKey | null>(null);
+
   if (job.status !== "done") return null;
 
   const videoUrl = job.video_url || "";
   const zipUrl = job.project_zip_url || "";
+
+  // Cross-origin <a download> is ignored by every browser, so we fetch the
+  // file as a blob and trigger a same-origin download. Works regardless of
+  // whether the API sets Content-Disposition.
+  async function handleDownload(
+    key: DownloadKey,
+    url: string,
+    filename: string,
+  ) {
+    if (!url || downloading) return;
+    setDownloading(key);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (err) {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  const mp4Name = `sfx_job_${job.job_id}.mp4`;
+  const zipName = `sfx_job_${job.job_id}.zip`;
 
   return (
     <div className="space-y-4">
@@ -17,6 +54,7 @@ export function JobResult({ job }: Props) {
         src={videoUrl}
         controls
         playsInline
+        preload="metadata"
         className="w-full rounded-xl bg-black aspect-video"
       />
 
@@ -39,22 +77,32 @@ export function JobResult({ job }: Props) {
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3 pt-2">
-        <a
-          href={videoUrl}
-          download
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium transition"
+        <button
+          type="button"
+          onClick={() => handleDownload("mp4", videoUrl, mp4Name)}
+          disabled={!videoUrl || downloading !== null}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg font-medium transition"
         >
-          <Download className="w-4 h-4" />
-          Download MP4
-        </a>
-        <a
-          href={zipUrl}
-          download
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-lg font-medium transition"
+          {downloading === "mp4" ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Download className="w-4 h-4" />
+          )}
+          {downloading === "mp4" ? "Preparing…" : "Download MP4"}
+        </button>
+        <button
+          type="button"
+          onClick={() => handleDownload("zip", zipUrl, zipName)}
+          disabled={!zipUrl || downloading !== null}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg font-medium transition"
         >
-          <Download className="w-4 h-4" />
-          Editor Project (ZIP)
-        </a>
+          {downloading === "zip" ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Download className="w-4 h-4" />
+          )}
+          {downloading === "zip" ? "Preparing…" : "Editor Project (ZIP)"}
+        </button>
       </div>
 
       <p className="text-xs text-neutral-500 text-center pt-2">
