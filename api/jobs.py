@@ -1,8 +1,9 @@
 """Job store and background processing (thread-based MVP)."""
 from __future__ import annotations
 
-import traceback
+import shutil
 import threading
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -206,6 +207,7 @@ def _safe_update_diag(job_id: str, diag: JobDiagnostics) -> None:
 def run_pipeline(job_id: str, video_path: Path, preset: str, base_url: str) -> None:
     """Run the full pipeline in a background thread."""
     diag = JobDiagnostics(storage_mode=STORAGE_MODE)
+    work_dir: Path | None = None
     try:
         _update_job(job_id, status=JobStatus.processing, progress_pct=5)
 
@@ -329,3 +331,18 @@ def run_pipeline(job_id: str, video_path: Path, preset: str, base_url: str) -> N
         diag.warnings.append(f"Pipeline error: {exc}")
         _close_steps(job_id)
         _update_job(job_id, status=JobStatus.failed, error=str(exc), diagnostics=diag)
+    finally:
+        # Always clean up the per-job temp + the original upload — final.mp4 +
+        # project.zip have already been copied into api_results/ by then. On a
+        # 5 GB volume this is what keeps the disk from filling up after a few
+        # jobs (uploads ~50–500 MB each, work_dir easily 200+ MB).
+        try:
+            if work_dir is not None and work_dir.exists():
+                shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception as cleanup_exc:
+            logger.warning("temp cleanup failed for %s: %s", job_id, cleanup_exc)
+        try:
+            if video_path.is_file():
+                video_path.unlink(missing_ok=True)
+        except Exception as cleanup_exc:
+            logger.warning("upload cleanup failed for %s: %s", job_id, cleanup_exc)

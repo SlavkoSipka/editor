@@ -235,6 +235,113 @@ def debug_music_test() -> dict:
         return {"ok": False, "reason": f"debug failed: {exc}"}
 
 
+def _dir_size_bytes(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+@app.get("/debug/disk")
+def debug_disk() -> dict:
+    """Per-directory disk usage under $DATA_DIR. Helps diagnose volume fill-ups."""
+    try:
+        import shutil as _shutil
+
+        from src.config import DATA_DIR
+
+        usage = _shutil.disk_usage(str(DATA_DIR)) if DATA_DIR.exists() else None
+        subdirs = [
+            "api_uploads", "api_results", "temp", "sound_cache",
+            "library", "embeddings", "logs",
+        ]
+        breakdown = {
+            name: round(_dir_size_bytes(DATA_DIR / name) / 1024 / 1024, 1)
+            for name in subdirs
+        }
+        return {
+            "ok": True,
+            "data_dir": str(DATA_DIR),
+            "volume_total_mb": round(usage.total / 1024 / 1024, 1) if usage else None,
+            "volume_used_mb": round(usage.used / 1024 / 1024, 1) if usage else None,
+            "volume_free_mb": round(usage.free / 1024 / 1024, 1) if usage else None,
+            "subdir_mb": breakdown,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/debug/cleanup")
+def debug_cleanup(keep_recent_jobs: int = 0) -> dict:
+    """Wipe upload/result/temp directories to free volume space.
+
+    By default deletes EVERYTHING (uploads, results, temp). Pass
+    ``?keep_recent_jobs=N`` to keep the N most-recent job result folders so a
+    user can still download a fresh render after cleanup.
+
+    Cache + library are NOT touched (they are R2-backed and cheap to refetch
+    on demand, but we don't want to evict the LRU cache unnecessarily).
+    """
+    import shutil as _shutil
+
+    from src.config import DATA_DIR, TEMP_DIR
+
+    uploads_dir = DATA_DIR / "api_uploads"
+    results_dir = DATA_DIR / "api_results"
+
+    freed_mb = 0.0
+    counts = {"uploads_removed": 0, "results_removed": 0, "temp_removed": 0}
+
+    def _rm(p: Path) -> float:
+        size_mb = _dir_size_bytes(p) / 1024 / 1024 if p.is_dir() else (
+            p.stat().st_size / 1024 / 1024 if p.is_file() else 0.0
+        )
+        try:
+            if p.is_dir():
+                _shutil.rmtree(p, ignore_errors=True)
+            elif p.is_file():
+                p.unlink(missing_ok=True)
+        except Exception:
+            return 0.0
+        return size_mb
+
+    if uploads_dir.exists():
+        for item in uploads_dir.iterdir():
+            freed_mb += _rm(item)
+            counts["uploads_removed"] += 1
+
+    if results_dir.exists():
+        job_dirs = sorted(
+            (p for p in results_dir.iterdir() if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        keep = set(job_dirs[: max(0, keep_recent_jobs)])
+        for item in results_dir.iterdir():
+            if item in keep:
+                continue
+            freed_mb += _rm(item)
+            counts["results_removed"] += 1
+
+    if TEMP_DIR.exists():
+        for item in TEMP_DIR.iterdir():
+            freed_mb += _rm(item)
+            counts["temp_removed"] += 1
+
+    return {
+        "ok": True,
+        "freed_mb": round(freed_mb, 1),
+        "counts": counts,
+        "keep_recent_jobs": keep_recent_jobs,
+    }
+
+
 @app.post("/debug/rebuild-music")
 def debug_rebuild_music() -> dict:
     """Force-rebuild the music_library collection. Diagnostic use only.
