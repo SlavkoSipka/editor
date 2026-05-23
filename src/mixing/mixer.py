@@ -31,11 +31,19 @@ _MUSIC_FADE_OUT_MS = 2000
 _MAX_MUSIC_DURATION_MS = 10 * 60 * 1000  # 10 min cap, plenty for a 3-min ad
 
 _SFX_PEAK_TARGET_DBFS = -6.0
+_SFX_LOUDNESS_TARGET_DBFS = -18.0
+_SFX_FADE_IN_MS = 15
 _INTENSITY_GAIN_DB: dict[str, float] = {
     "sharp": 0.0,
-    "medium": -3.0,
-    "soft": -6.0,
+    "medium": -2.0,
+    "soft": -4.0,
 }
+_TIER_GAIN_DB: dict[str, float] = {
+    "anchor": 0.0,
+    "accent": -3.5,
+}
+_TIER_GAIN_DEFAULT_DB = -2.0
+SFX_MAX_DBFS_IN_MIX = -8.0
 _DUCK_DURATION_SEC = 0.5
 _DUCK_GAIN_DB = -3.0
 _DUCK_FADE_MS = 80
@@ -43,13 +51,25 @@ _TRUE_PEAK_CEILING_DBFS = -1.0
 
 SPEECH_MUSIC_DUCK_DB = -10.0
 SPEECH_AMBIENT_DUCK_DB = -6.0
-SPEECH_SFX_DUCK_DB = -4.0
+SPEECH_SFX_DUCK_DB_LIGHT = -5.0
+SPEECH_SFX_DUCK_DB_HEAVY = -9.0
+SPEECH_SFX_DUCK_HEAVY_COVERAGE = 0.4
 SPEECH_PROTECTION_FADE_MS = 200
 SPEECH_REGION_PADDING_SEC = 0.1
 MUSIC_MAX_DB_WITH_SPEECH = -16.0
 MUSIC_MAX_DB_WITHOUT_SPEECH = -10.0
 ORIGINAL_MIN_DB_WITH_SPEECH = -2.0
 SPEECH_COVERAGE_THRESHOLD = 0.15
+OPENING_WINDOW_SEC = 1.5
+OPENING_EARLY_SPEECH_WINDOW_SEC = 2.0
+OPENING_SFX_OVER_SPEECH_DUCK_DB = -6.0
+
+
+def get_sfx_speech_duck(speech_coverage: float) -> float:
+    """More speech coverage = duck SFX harder so the voice always wins."""
+    if speech_coverage > SPEECH_SFX_DUCK_HEAVY_COVERAGE:
+        return SPEECH_SFX_DUCK_DB_HEAVY
+    return SPEECH_SFX_DUCK_DB_LIGHT
 
 
 def load_sfx_safely(
@@ -125,6 +145,24 @@ def normalize_sfx_to_peak(
     gain_needed = target_peak_dbfs - current_peak
     gain_needed = max(min(gain_needed, 18.0), -24.0)
     return audio + gain_needed
+
+
+def normalize_sfx_loudness(
+    audio: AudioSegment, target_dbfs: float = _SFX_LOUDNESS_TARGET_DBFS,
+) -> AudioSegment:
+    """Normalize an SFX by its RMS (average) loudness, not peak.
+
+    Gives consistent PERCEIVED loudness across different sounds. Caps gain to
+    avoid blowing up near-silent files, and pulls the peak back below -1 dBFS
+    if normalization pushed it into clipping territory."""
+    if audio.dBFS == float("-inf"):
+        return audio
+    gain_needed = target_dbfs - audio.dBFS
+    gain_needed = max(min(gain_needed, 20.0), -25.0)
+    adjusted = audio + gain_needed
+    if adjusted.max_dBFS > -1.0:
+        adjusted = adjusted + (-1.0 - adjusted.max_dBFS)
+    return adjusted
 
 
 def hard_limit(
@@ -227,13 +265,62 @@ def _overlay_sfx(
     match: dict[str, Any],
     preset: Preset,
     total_duration_ms: int,
+    speech_regions: list[tuple[float, float]] | None = None,
+    speech_coverage: float = 0.0,
+    has_speech: bool = False,
+    speech_stats: dict[str, Any] | None = None,
 ) -> tuple[AudioSegment, bool]:
-    seg = normalize_sfx_to_peak(seg)
-    intensity = str(match.get("intensity", "medium") or "medium").lower()
-    seg = seg + _INTENSITY_GAIN_DB.get(intensity, _INTENSITY_GAIN_DB["medium"])
+    """Process & overlay a single SFX in the order described in Step 23.5:
+    1. normalize_sfx_loudness  →  2. intensity gain  →  3. tier gain  →
+    4. preset SFX gain         →  5. speech duck     →  6. opening cap  →
+    7. SFX_MAX_DBFS_IN_MIX cap →  8. fade in/out     →  9. scene trim   →
+    10. overlay."""
+    abs_ts = float(match.get("absolute_timestamp") or 0.0)
+
+    seg = normalize_sfx_loudness(seg)
+
+    recipe_volume_db = match.get("recipe_layer_volume_db")
+    if recipe_volume_db is None:
+        intensity = str(match.get("intensity", "medium") or "medium").lower()
+        seg = seg + _INTENSITY_GAIN_DB.get(intensity, _INTENSITY_GAIN_DB["medium"])
+    else:
+        # Recipe layers are pre-balanced; use the layer volume instead of
+        # the generic intensity gain.
+        seg = seg + float(recipe_volume_db)
+
+    value_tier = str(match.get("value_tier", "accent") or "accent").lower()
+    seg = seg + _TIER_GAIN_DB.get(value_tier, _TIER_GAIN_DEFAULT_DB)
+
     seg = seg + preset.sfx_volume_db
 
-    position_ms = max(0, int(float(match["absolute_timestamp"]) * 1000))
+    if has_speech and speech_regions and is_in_speech_region(
+        abs_ts, speech_regions, padding_sec=SPEECH_REGION_PADDING_SEC,
+    ):
+        seg = seg + get_sfx_speech_duck(speech_coverage)
+        if speech_stats is not None:
+            speech_stats["sfx_ducked_count"] = (
+                int(speech_stats.get("sfx_ducked_count", 0)) + 1
+            )
+
+    if abs_ts < OPENING_WINDOW_SEC and speech_regions:
+        speech_in_opening = any(
+            float(s) < OPENING_EARLY_SPEECH_WINDOW_SEC
+            for s, _e in speech_regions
+        )
+        if speech_in_opening:
+            seg = seg + OPENING_SFX_OVER_SPEECH_DUCK_DB
+            logger.info(
+                "Opening SFX at %.2fs reduced %+.1fdB (early speech present)",
+                abs_ts, OPENING_SFX_OVER_SPEECH_DUCK_DB,
+            )
+
+    if seg.dBFS != float("-inf") and seg.dBFS > SFX_MAX_DBFS_IN_MIX:
+        seg = seg + (SFX_MAX_DBFS_IN_MIX - seg.dBFS)
+
+    if len(seg) > _SFX_FADE_IN_MS:
+        seg = seg.fade_in(_SFX_FADE_IN_MS)
+
+    position_ms = max(0, int(abs_ts * 1000))
     if position_ms >= total_duration_ms:
         logger.warning(
             "SFX position %dms >= mix duration %dms; skipping (%s)",
@@ -241,7 +328,6 @@ def _overlay_sfx(
         )
         return master, False
 
-    # Trim SFX so it doesn't bleed into the next scene (allow short tail overlap).
     scene_start_ms = int(float(match.get("scene_start_sec", 0.0)) * 1000)
     scene_end_ms = int(float(match.get("scene_end_sec", 0.0)) * 1000)
     scene_duration_ms = max(0, scene_end_ms - scene_start_ms)
@@ -401,6 +487,7 @@ def mix_audio(
         "ON" if has_speech else "off",
     )
 
+    sfx_duck_db = get_sfx_speech_duck(speech_cov) if has_speech else 0.0
     speech_stats: dict[str, Any] = {
         "regions": len(speech_regions),
         "coverage_pct": round(speech_cov * 100, 1),
@@ -408,7 +495,7 @@ def mix_audio(
         "music_ceiling_db": music_ceiling_db,
         "music_duck_db": SPEECH_MUSIC_DUCK_DB if has_speech else 0.0,
         "ambient_duck_db": SPEECH_AMBIENT_DUCK_DB if has_speech else 0.0,
-        "sfx_duck_db": SPEECH_SFX_DUCK_DB if has_speech else 0.0,
+        "sfx_duck_db": sfx_duck_db,
         "sfx_ducked_count": 0,
     }
 
@@ -453,14 +540,13 @@ def mix_audio(
             else:
                 skipped += 1
         else:
-            if has_speech and is_in_speech_region(
-                float(match.get("absolute_timestamp") or 0.0),
-                speech_regions,
-                padding_sec=SPEECH_REGION_PADDING_SEC,
-            ):
-                seg = seg + SPEECH_SFX_DUCK_DB
-                speech_stats["sfx_ducked_count"] += 1
-            master, ok = _overlay_sfx(master, seg, match, preset, total_duration_ms)
+            master, ok = _overlay_sfx(
+                master, seg, match, preset, total_duration_ms,
+                speech_regions=speech_regions,
+                speech_coverage=speech_cov,
+                has_speech=has_speech,
+                speech_stats=speech_stats,
+            )
             if ok:
                 sfx_count += 1
             else:

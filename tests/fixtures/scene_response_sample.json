@@ -1,30 +1,25 @@
 {
   "scene_index": 0,
-  "scene_description": "A person walks across a hardwood floor and pushes an interior door open into a sunlit room.",
-  "mood": "tense",
-  "environment": "indoor_apartment",
+  "scene_description": "A hard cut into a close-up of the product on a tabletop, then a quick on-screen text pop.",
+  "mood": "energetic",
+  "environment": "indoor_studio",
   "actions": [
     {
-      "timestamp_in_scene": 0.42,
-      "type": "footstep_wood",
-      "description": "single footstep on wooden floor",
-      "intensity": "soft",
-      "confidence": 0.78
-    },
-    {
-      "timestamp_in_scene": 1.85,
-      "type": "door_open",
-      "description": "interior door pushed open with light creak",
-      "intensity": "medium",
-      "confidence": 0.71
-    },
-    {
-      "timestamp_in_scene": 2.30,
-      "type": "whoosh_transition",
-      "description": "fast camera whoosh as the shot pans",
+      "timestamp_in_scene": 0.0,
+      "type": "scene_transition",
+      "description": "fast punchy swoosh whoosh for a hard cut transition",
       "intensity": "sharp",
-      "confidence": 0.65
+      "confidence": 0.88,
+      "sound_value": 0.9
+    },
+    {
+      "timestamp_in_scene": 1.42,
+      "type": "text_pop",
+      "description": "tight punchy ui pop for on-screen text appearing",
+      "intensity": "sharp",
+      "confidence": 0.74,
+      "sound_value": 0.7
     }
   ],
-  "ambient_suggestion": "quiet_room_tone"
+  "ambient_suggestion": null
 }

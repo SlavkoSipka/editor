@@ -10,3 +10,5 @@ logs/
 .DS_Store
 *.log
 tests/sample_videos/*.mp4
+eval/results/
+eval/videos/

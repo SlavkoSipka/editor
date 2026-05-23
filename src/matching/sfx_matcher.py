@@ -17,6 +17,9 @@ from src.library.vector_store import (
 )
 from src.matching.music_matcher import select_music
 from src.matching.preset_reranker import rerank_candidates
+from src.matching.recipe_builder import build_recipe_layers
+from src.matching.recipes import moment_type_for_action
+from src.matching.selectivity import apply_selectivity
 from src.matching.timing_adjuster import snap_to_onsets
 from src.preprocessing.onset_detector import detect_onsets_from_video
 from src.preprocessing.scene_detector import Scene, detect_scenes
@@ -504,8 +507,9 @@ def _build_match_entry(
     confidence: float,
     layer: str,
     best: dict[str, Any],
+    gemini_sound_value: float | None = None,
 ) -> dict[str, Any]:
-    return {
+    entry: dict[str, Any] = {
         "scene_index": scene_index,
         "scene_start_sec": scene_start,
         "scene_end_sec": scene_end,
@@ -526,6 +530,9 @@ def _build_match_entry(
         "routing_path": best.get("routing_path", "global"),
         "tier_filter_used": list(best.get("tier_filter_used") or []),
     }
+    if gemini_sound_value is not None:
+        entry["gemini_sound_value"] = float(gemini_sound_value)
+    return entry
 
 
 def _enforce_same_type_gap(
@@ -788,6 +795,7 @@ def match_analysis(
                 candidates[0],
             )
             best = _candidate_to_match_payload(chosen, sfx_action)
+            sound_value = action.get("sound_value")
             scene_sfx_matches.append(_build_match_entry(
                 scene_index=scene_index,
                 scene_start=scene_start,
@@ -799,6 +807,9 @@ def match_analysis(
                 confidence=float(action.get("confidence") or 0.0),
                 layer="sfx",
                 best=best,
+                gemini_sound_value=(
+                    float(sound_value) if sound_value is not None else None
+                ),
             ))
             used_sound_counts[chosen["id"]] = used_sound_counts.get(chosen["id"], 0) + 1
 
@@ -872,9 +883,49 @@ def match_analysis(
     stats["routing_by_tier"] = routing_by_tier
     stats["tier_counts"] = tier_counts
 
+    strategy = analysis.get("strategy") or {}
+    anchor_moments = strategy.get("anchor_moments") or []
+    anchor_timestamps = [
+        float(am.get("timestamp_sec") or 0.0) for am in anchor_moments
+    ]
+    recipes_info: list[dict[str, Any]] = []
+    if anchor_timestamps or any(
+        moment_type_for_action(str(m.get("action_type") or "")) for m in matches
+    ):
+        recipe_matches: list[dict[str, Any]] = []
+        replaced_ids: set[int] = set()
+        for m in matches:
+            if m.get("layer") != "sfx":
+                continue
+            ts = float(m.get("absolute_timestamp") or 0.0)
+            is_anchor = (
+                any(abs(ts - at) < 0.8 for at in anchor_timestamps)
+                if anchor_timestamps else False
+            )
+            if not is_anchor:
+                continue
+            layers = build_recipe_layers(m, preset_name, qdrant_client)
+            if layers:
+                recipe_matches.extend(layers)
+                replaced_ids.add(id(m))
+                recipes_info.append({
+                    "anchor_timestamp": ts,
+                    "action_type": m.get("action_type"),
+                    "recipe_name": layers[0].get("recipe_name"),
+                    "layer_count": len(layers),
+                })
+        if recipe_matches:
+            matches = [m for m in matches if id(m) not in replaced_ids] + recipe_matches
+            matches.sort(key=lambda x: float(x.get("absolute_timestamp") or 0.0))
+    stats["recipes"] = {
+        "applied": len(recipes_info),
+        "layer_total": sum(int(r.get("layer_count") or 0) for r in recipes_info),
+        "details": recipes_info,
+    }
+
     music = select_music(analysis, preset_name, qdrant_client)
 
-    return {
+    match_plan: dict[str, Any] = {
         "video_path": analysis.get("video_path", ""),
         "preset": analysis.get("preset", ""),
         "duration_sec": analysis.get("duration_sec", 0.0),
@@ -883,6 +934,12 @@ def match_analysis(
         "unmatched_actions": unmatched,
         "match_stats": stats,
     }
+
+    energy_curve = strategy.get("energy_curve") or []
+    match_plan = apply_selectivity(match_plan, strategy, energy_curve)
+    stats["selectivity"] = match_plan.get("selectivity_stats", {})
+
+    return match_plan
 
 
 def _main() -> None:

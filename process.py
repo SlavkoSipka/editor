@@ -125,6 +125,11 @@ def _parse_args() -> argparse.Namespace:
             "(e.g. v007_tiktok_viral.mp4) and updates latest.mp4 + index.json."
         ),
     )
+    parser.add_argument(
+        "--verbose-selectivity",
+        action="store_true",
+        help="Print value scores and reasons for every SFX (kept and pruned).",
+    )
     return parser.parse_args()
 
 
@@ -256,6 +261,55 @@ def main() -> int:
             f"{sfx_count}/{total_sfx_actions} actions matched, "
             f"{ambient_count} ambient layers",
         )
+
+        recipes_stat = (match_plan.get("match_stats") or {}).get("recipes") or {}
+        recipes_applied = int(recipes_stat.get("applied") or 0)
+        if recipes_applied:
+            print(
+                f"     Recipes: {recipes_applied} anchor moment(s) → "
+                f"{int(recipes_stat.get('layer_total') or 0)} layer(s)"
+            )
+            for r in recipes_stat.get("details") or []:
+                print(
+                    f"       \u00b7 {r.get('action_type', '?')} @ "
+                    f"{float(r.get('anchor_timestamp') or 0):.1f}s — "
+                    f"{r.get('recipe_name', '?')} "
+                    f"({int(r.get('layer_count') or 0)} layers)"
+                )
+
+        sel = match_plan.get("selectivity_stats") or {}
+        if sel:
+            print(
+                f"     Selectivity: {sel.get('input_sfx', 0)} SFX → "
+                f"{sel.get('kept_sfx', 0)} kept "
+                f"({sel.get('anchors', 0)} anchors, {sel.get('accents', 0)} accents, "
+                f"{sel.get('recipe_layers', 0)} recipe layers in "
+                f"{sel.get('recipe_groups', 0)} group(s)), "
+                f"{sel.get('pruned_sfx', 0)} pruned"
+            )
+
+        if args.verbose_selectivity:
+            print()
+            print("     SELECTIVITY DETAIL")
+            print("     " + "\u2500" * 60)
+            for m in match_plan["matches"]:
+                if m.get("layer") != "sfx":
+                    continue
+                tier = m.get("value_tier", "?")
+                vs = m.get("value_score", 0.0)
+                reasons = ", ".join(m.get("value_reasons") or [])
+                print(
+                    f"     KEPT ({tier:<6}) {float(m.get('absolute_timestamp') or 0):>5.1f}s  "
+                    f"{str(m.get('action_type', '')):<22} value={vs:.2f}  [{reasons}]"
+                )
+            for p in match_plan.get("pruned_actions") or []:
+                ts = float(p.get("timestamp") or 0.0)
+                print(
+                    f"     PRUNED         {ts:>5.1f}s  "
+                    f"{str(p.get('action_type', '')):<22} value={float(p.get('value_score') or 0):.2f}  "
+                    f"[{p.get('reason', '')}]"
+                )
+            print()
 
         director_stats = match_plan.get("match_stats", {}).get("director") or {}
         if director_stats.get("silent_dropped") or director_stats.get("budget_dropped"):

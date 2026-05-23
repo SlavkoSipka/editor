@@ -59,10 +59,49 @@ def _select_frames(frame_paths: list[Path]) -> list[Path]:
     return [frame_paths[i] for i in indices]
 
 
+def _sample_scene_frames(
+    scene_frames: list[Path],
+    fps: int = FRAME_RATE,
+    max_frames: int = _MAX_FRAMES_PER_SCENE,
+) -> tuple[list[Path], list[float]]:
+    """Pick up to ``max_frames`` from ``scene_frames`` (already sliced for this
+    scene at ``fps``) and return (paths, scene-relative timestamps in seconds)."""
+    if not scene_frames:
+        return [], []
+    if len(scene_frames) <= max_frames:
+        sampled = list(scene_frames)
+        local_indices = list(range(len(scene_frames)))
+    else:
+        idx = np.linspace(0, len(scene_frames) - 1, max_frames, dtype=int)
+        sampled = [scene_frames[int(i)] for i in idx]
+        local_indices = [int(i) for i in idx]
+    frame_times = [max(0.0, i / float(fps)) for i in local_indices]
+    return sampled, frame_times
+
+
 def _format_onset_hints(onsets: list[float]) -> str:
     if not onsets:
         return "none detected"
     return "[" + ", ".join(f"{t:.2f}" for t in onsets) + "]"
+
+
+def _scene_has_speech(
+    scene: Scene, speech_regions: list[tuple[float, float]] | None,
+) -> bool:
+    if not speech_regions:
+        return False
+    return any(
+        not (float(e) < scene.start_sec or float(s) > scene.end_sec)
+        for s, e in speech_regions
+    )
+
+
+def _normalize_action(action: dict[str, Any]) -> dict[str, Any]:
+    """Backfill defaults for fields the v2 prompt added so old cached analyses
+    keep working."""
+    if "sound_value" not in action or action.get("sound_value") is None:
+        action["sound_value"] = 0.6
+    return action
 
 
 def _fallback_response(scene: Scene) -> dict[str, Any]:
@@ -101,39 +140,52 @@ def analyze_scene(
         logger.info("Dry-run: loading fixture for scene %d", scene.index)
         return _load_fixture(scene.index)
 
-    selected = _select_frames(frame_paths)
-    if len(selected) < _MIN_FRAMES_PER_SCENE and len(frame_paths) > 0:
+    sampled, frame_times = _sample_scene_frames(
+        frame_paths, fps=FRAME_RATE, max_frames=_MAX_FRAMES_PER_SCENE,
+    )
+    if len(sampled) < _MIN_FRAMES_PER_SCENE and len(frame_paths) > 0:
         logger.warning(
             "Scene %d only has %d frames (< %d preferred); proceeding anyway",
-            scene.index, len(selected), _MIN_FRAMES_PER_SCENE,
+            scene.index, len(sampled), _MIN_FRAMES_PER_SCENE,
         )
-    if not selected:
+    if not sampled:
         logger.error("Scene %d has no frames; returning fallback", scene.index)
         return _fallback_response(scene)
 
-    scene_ctx = scene_context_from_strategy(scene, strategy or {}, total_scenes)
+    strategy = strategy or {}
+    scene_ctx = scene_context_from_strategy(scene, strategy, total_scenes)
+    frame_ts_str = ", ".join(
+        f"frame {i + 1} = {t:.2f}s" for i, t in enumerate(frame_times)
+    )
+
+    has_speech = _scene_has_speech(scene, strategy.get("speech_regions"))
+    speech_note = (
+        "NOTE: This scene contains SPEECH. Do not add SFX over spoken words "
+        "unless it's a hard cut or deliberate punctuation."
+        if has_speech else ""
+    )
+
     prompt_text = SCENE_PROMPT_TEMPLATE.format(
         scene_index=scene.index,
         scene_start=scene.start_sec,
         scene_end=scene.end_sec,
         scene_duration=scene.duration_sec,
-        onset_hints=_format_onset_hints(onset_hints),
-        preset=preset,
-        schema=json.dumps(SCENE_RESPONSE_SCHEMA, indent=2),
-        style=(strategy or {}).get("style", "unknown"),
-        vibe=(strategy or {}).get("vibe", "neutral"),
         scene_role=scene_ctx["scene_role"],
         energy_level=scene_ctx["energy_level"],
-        max_sfx_count=scene_ctx["max_sfx_count"],
+        style=strategy.get("style") or "UGC short-form ad",
+        vibe=strategy.get("vibe") or "neutral",
+        n_frames=len(sampled),
+        frame_timestamps=frame_ts_str,
+        onset_hints=_format_onset_hints(onset_hints),
+        speech_note=speech_note,
+        scene_specific_directive=scene_ctx["scene_specific_directive"] or "(none)",
         scene_sfx_budget=scene_ctx["scene_sfx_budget"],
-        silence_note=scene_ctx["silence_note"] or "(no silence constraint)",
-        anchor_note=scene_ctx["anchor_note"] or "(no anchor moment in this scene)",
-        scene_specific_directive=scene_ctx["scene_specific_directive"]
-            or "(no scene-specific directive)",
+        silence_note=scene_ctx["silence_note"] or "",
+        anchor_note=scene_ctx["anchor_note"] or "",
     )
 
     model = _get_model()
-    images = [Image.open(p) for p in selected]
+    images = [Image.open(p) for p in sampled]
     request_parts: list[Any] = [prompt_text, *images]
 
     last_exc: Exception | None = None
@@ -148,6 +200,9 @@ def analyze_scene(
             if missing:
                 raise ValueError(f"Response missing required keys: {missing}")
             data["scene_index"] = scene.index
+            for action in data.get("actions") or []:
+                if isinstance(action, dict):
+                    _normalize_action(action)
             return data
         except Exception as exc:
             last_exc = exc

@@ -148,6 +148,29 @@ Poll until `status` is `done`, then download `video_url` / `project_zip_url` fro
 | `R2_BUCKET` | Bucket name (objects under prefixes `library/` and `embeddings/`). |
 | `R2_SYNC_FORCE` | Set `1` to re-download library + embeddings even if `manifest.json` already exists on the volume. |
 
+## Evaluation
+
+The eval framework measures sound design quality objectively, so you can prove
+a change made things better (or worse).
+
+### Setup
+1. Place 10–15 representative test videos in `eval/videos/`.
+2. Register each in `eval/test_set.py` with expected SFX count ranges and a recommended preset.
+
+### Run
+
+```bash
+python -m eval.run                       # objective metrics only (fast, free)
+python -m eval.run --ai-judge            # also run the Gemini AI judge (uses tokens)
+python -m eval.run --compare \
+    eval/results/eval_A.json \
+    eval/results/eval_B.json             # diff two runs
+```
+
+Each run writes a timestamped JSON under `eval/results/` (gitignored). Run the
+suite before *and* after any significant pipeline change to confirm the change
+improved the average objective score.
+
 ## Cloud deployment
 
 Single Docker image: **FastAPI + Qdrant binary** in one container; Qdrant storage lives under `$DATA_DIR/embeddings` (same layout as local `docker run … -v ./data/embeddings:/qdrant/storage`). A Railway volume mounted at `/data` keeps uploads, library copies, embeddings, and Qdrant files across deploys.
