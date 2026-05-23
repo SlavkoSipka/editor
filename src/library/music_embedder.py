@@ -97,13 +97,84 @@ def embed_music_library(manifest_path: Path) -> list[dict[str, Any]]:
     return sounds
 
 
+def _index_music_sounds(sounds: list[dict[str, Any]]) -> int:
+    """Recreate the music_library collection and upsert the given embeddings.
+
+    Recreate (vs. ``create_collection`` only) keeps reruns idempotent: the
+    cloud entrypoint can call this repeatedly without piling up duplicate
+    points or hitting "already exists" errors.
+    """
+    client = get_qdrant_client()
+    create_collection(client, MUSIC_COLLECTION_NAME)
+    return index_sounds(client, MUSIC_COLLECTION_NAME, sounds)
+
+
+def build_music_index_from_cache() -> int:
+    """Build the ``music_library`` Qdrant collection without needing audio.
+
+    Music embeddings are text-based (name + description + tags + mood), so
+    the audio files never have to be on disk. Order of preference:
+
+    1. Use the pre-computed ``music_embeddings.json`` (fast, deterministic).
+    2. Otherwise embed from ``library/music/manifest.json`` text on the fly.
+
+    Mirrors the SFX ``--from-cache`` path used by the cloud entrypoint.
+    """
+    if _MUSIC_CACHE_PATH.is_file():
+        logger.info(
+            "Building music_library from cached embeddings: %s", _MUSIC_CACHE_PATH,
+        )
+        sounds: list[dict[str, Any]] = json.loads(_MUSIC_CACHE_PATH.read_text())
+    elif _MUSIC_MANIFEST_PATH.is_file():
+        logger.info(
+            "music_embeddings.json missing — embedding manifest %s on the fly",
+            _MUSIC_MANIFEST_PATH,
+        )
+        sounds = embed_music_library(_MUSIC_MANIFEST_PATH)
+    else:
+        raise RuntimeError(
+            f"Cannot build music index: neither {_MUSIC_CACHE_PATH} nor "
+            f"{_MUSIC_MANIFEST_PATH} exists. In R2 mode, ensure the entrypoint "
+            "synced library/music/manifest.json (and ideally "
+            "embeddings/music_embeddings.json) from R2."
+        )
+
+    if not sounds:
+        raise RuntimeError("Music index source had zero entries — refusing to build.")
+
+    indexed = _index_music_sounds(sounds)
+    logger.info(
+        "Indexed %d tracks in collection %r", indexed, MUSIC_COLLECTION_NAME,
+    )
+    return indexed
+
+
 def _main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Embed the music library and index it into Qdrant.",
+    )
+    parser.add_argument(
+        "--from-cache",
+        action="store_true",
+        help=(
+            "Build the music_library collection without needing audio files. "
+            "Uses music_embeddings.json if present, otherwise embeds the "
+            "music manifest text directly. Used by the cloud entrypoint."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.from_cache:
+        indexed = build_music_index_from_cache()
+        print(f"Indexed {indexed} tracks in collection {MUSIC_COLLECTION_NAME!r}")
+        return
+
     sounds = embed_music_library(_MUSIC_MANIFEST_PATH)
     print(f"Embedded {len(sounds)} music tracks")
 
-    client = get_qdrant_client()
-    create_collection(client, MUSIC_COLLECTION_NAME)
-    indexed = index_sounds(client, MUSIC_COLLECTION_NAME, sounds)
+    indexed = _index_music_sounds(sounds)
     print(f"Indexed {indexed} tracks in collection {MUSIC_COLLECTION_NAME!r}")
 
     mood_counts: dict[str, int] = {}
@@ -115,6 +186,7 @@ def _main() -> None:
         print(f"  {mood:<12} {count}")
 
     print("\nTest query: 'dramatic cinematic underscore'")
+    client = get_qdrant_client()
     results = search_by_text(
         client, MUSIC_COLLECTION_NAME, "dramatic cinematic underscore", top_k=3,
     )

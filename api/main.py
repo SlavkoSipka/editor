@@ -235,6 +235,36 @@ def debug_music_test() -> dict:
         return {"ok": False, "reason": f"debug failed: {exc}"}
 
 
+@app.post("/debug/rebuild-music")
+def debug_rebuild_music() -> dict:
+    """Force-rebuild the music_library collection. Diagnostic use only.
+
+    Lets us repair a live deployment that booted before the music index was
+    being built, without waiting for a redeploy / volume marker reset.
+    """
+    try:
+        from src.library.music_embedder import (
+            MUSIC_COLLECTION_NAME,
+            build_music_index_from_cache,
+        )
+
+        indexed = build_music_index_from_cache()
+        client = get_qdrant_client()
+        info = client.get_collection(MUSIC_COLLECTION_NAME)
+        return {
+            "ok": True,
+            "indexed": indexed,
+            "music_points": info.points_count,
+        }
+    except Exception as exc:
+        import traceback
+        return {
+            "ok": False,
+            "error": str(exc),
+            "trace": traceback.format_exc()[-1000:],
+        }
+
+
 @app.get("/jobs/{job_id}/download/{filename}")
 def download_result(job_id: str, filename: str) -> FileResponse:
     job = get_job(job_id)

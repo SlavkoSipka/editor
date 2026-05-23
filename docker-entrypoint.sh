@@ -74,6 +74,20 @@ ok = fetch_object('library/manifest.json', dest)
 print('manifest:', 'ok' if ok else 'FAILED')
 " || echo "WARNING: manifest fetch failed"
     fi
+
+    # Music manifest is a separate small file under library/music/ — needed so
+    # the music embedder can build the music_library Qdrant collection.
+    if [ ! -f "$DATA_DIR/library/music/manifest.json" ] || [ "${R2_SYNC_FORCE:-}" = "1" ]; then
+      echo "R2: fetching library/music/manifest.json..."
+      mkdir -p "$DATA_DIR/library/music"
+      python -c "
+from pathlib import Path
+from src.library.r2_fetch import fetch_object
+dest = Path('$DATA_DIR/library/music/manifest.json')
+ok = fetch_object('library/music/manifest.json', dest)
+print('music manifest:', 'ok' if ok else 'FAILED')
+" || echo "WARNING: music manifest fetch failed"
+    fi
   else
     # Local / baked-image mode — keep the existing full-sync behavior.
     if [ "$R2_READY" = "1" ]; then
@@ -134,16 +148,19 @@ except Exception:
       echo "SFX collection already has $SFX_PTS points — skipping embedder."
     fi
 
-    # Music collection is optional and only ever built from local manifest;
-    # skip in pure R2 mode unless someone explicitly seeded the music manifest.
-    if [ -f "$DATA_DIR/library/music/manifest.json" ]; then
+    # Music collection: build whenever the music manifest (or cached vectors)
+    # is on disk. In R2 mode the embedder runs --from-cache, which never
+    # requires the audio files.
+    if [ -f "$DATA_DIR/library/music/manifest.json" ] || [ -f "$DATA_DIR/embeddings/music_embeddings.json" ]; then
       MUSIC_PTS=$(collection_points music_library)
-      if [ "${MUSIC_PTS:-0}" -eq 0 ]; then
-        echo "Indexing music collection..."
-        python -m src.library.music_embedder || echo "WARNING: music embedder failed"
+      if [ "${MUSIC_PTS:-0}" -eq 0 ] || [ "${MUSIC_REINDEX:-}" = "1" ]; then
+        echo "Indexing music collection (mode=$STORAGE_MODE)..."
+        python -m src.library.music_embedder $EMBED_ARGS || echo "WARNING: music embedder failed"
       else
         echo "Music collection already has $MUSIC_PTS points — skipping music embedder."
       fi
+    else
+      echo "No music manifest or cache on disk — skipping music indexing."
     fi
   else
     echo "WARNING: No embeddings.json or manifest.json found — Qdrant will be empty."
