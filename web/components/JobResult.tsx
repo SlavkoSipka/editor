@@ -4,11 +4,14 @@ import type { JobInfo } from "@/lib/api";
 import { Download, Loader2, Music } from "lucide-react";
 import { useState } from "react";
 
-type Props = { job: JobInfo };
+type Props = {
+  job: JobInfo;
+  videoRef?: React.RefObject<HTMLVideoElement | null>;
+};
 
 type DownloadKey = "mp4" | "zip";
 
-export function JobResult({ job }: Props) {
+export function JobResult({ job, videoRef }: Props) {
   const [downloading, setDownloading] = useState<DownloadKey | null>(null);
 
   if (job.status !== "done") return null;
@@ -51,6 +54,7 @@ export function JobResult({ job }: Props) {
   return (
     <div className="space-y-4">
       <video
+        ref={videoRef}
         src={videoUrl}
         controls
         playsInline

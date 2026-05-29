@@ -5,6 +5,7 @@ export type Preset = {
   id: string;
   name: string;
   description: string;
+  density: number;
 };
 
 export type JobStep = {
@@ -48,6 +49,9 @@ export type JobDiagnostics = {
   r2_fetch_failures: number;
   speech_regions: number;
   speech_coverage_pct: number;
+  verification_checked: number;
+  verification_dropped: number;
+  verification_dropped_detail: string[];
   sounds: SoundDiagnostic[];
   warnings: string[];
 };
@@ -87,12 +91,14 @@ export async function getPresets(): Promise<Preset[]> {
 export function submitJob(
   file: File,
   preset: string,
+  density: number,
   onProgress?: UploadProgressCallback,
 ): Promise<JobInfo> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("video", file);
     form.append("preset", preset);
+    form.append("density", String(density));
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/jobs`);
@@ -136,4 +142,40 @@ export async function getJob(jobId: string): Promise<JobInfo> {
   const res = await fetch(`${API_BASE}/jobs/${jobId}`);
   if (!res.ok) throw new Error("Job not found");
   return res.json();
+}
+
+export type SoundRating = "good" | "wrong" | "unnecessary";
+
+export type SoundFeedback = {
+  sound_index: number;
+  sound_id?: string;
+  sound_name?: string;
+  action_type?: string;
+  timestamp: number;
+  matched_tier?: string;
+  match_score?: number;
+  rating: SoundRating;
+};
+
+export type JobFeedback = {
+  job_id: string;
+  preset: string;
+  density?: number;
+  overall_rating?: number;
+  density_feedback?: "too_low" | "right" | "too_high";
+  overall_note?: string;
+  sound_feedback: SoundFeedback[];
+  missing_sounds: { timestamp: number; note?: string }[];
+};
+
+export async function submitFeedback(
+  jobId: string,
+  fb: JobFeedback,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fb),
+  });
+  if (!res.ok) throw new Error("Feedback submit failed");
 }

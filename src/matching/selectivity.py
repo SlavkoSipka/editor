@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from src.matching.density import compute_target_sound_count, fill_to_target
 from src.utils.logger import get_logger
 
 logger = get_logger("selectivity")
@@ -216,14 +217,23 @@ def apply_selectivity(
     match_plan: dict,
     strategy: dict,
     music_energy_curve: list | None = None,
+    density: float | None = None,
+    duration_sec: float | None = None,
 ) -> dict:
-    """Score every SFX match, then prune to a curated set."""
+    """Score every SFX match, then FILL UP to a density-driven target.
+
+    Scoring (``score_action_value``) is unchanged. The old "cut below
+    thresholds + hard cap + anchor radius" logic is replaced by
+    ``fill_to_target``: rank by value, keep the top N where N comes from the
+    density setting, and apply spacing only when it won't drop us below the
+    floor. Recipe layers always survive.
+    """
     matches = match_plan.get("matches", []) or []
     sfx_all = [m for m in matches if m.get("layer") == "sfx"]
     ambient = [m for m in matches if m.get("layer") == "ambient"]
 
     # Recipe layers are part of a designed anchor unit — never score or prune
-    # them individually. They count as ONE group toward the global cap.
+    # them individually. They count as ONE group toward the density target.
     recipe_sfx = [m for m in sfx_all if m.get("recipe_name")]
     sfx = [m for m in sfx_all if not m.get("recipe_name")]
 
@@ -237,11 +247,31 @@ def apply_selectivity(
             recipe_group_keys.append(key)
     recipe_group_count = len(recipe_group_keys)
 
+    if density is None:
+        density = 0.5
+    if duration_sec is None:
+        duration_sec = float(
+            strategy.get("duration_sec")
+            or match_plan.get("duration_sec")
+            or 30.0
+        )
+
+    energy_curve = strategy.get("energy_curve") or []
+    if energy_curve:
+        energy_avg = sum(
+            float(p.get("level", 0.5) or 0.5) for p in energy_curve
+        ) / len(energy_curve)
+    else:
+        energy_avg = 0.5
+
     if not sfx and not recipe_sfx:
+        target = compute_target_sound_count(duration_sec, density, energy_avg)
         match_plan["selectivity_stats"] = {
             "input_sfx": 0, "kept_sfx": 0, "pruned_sfx": 0,
             "anchors": 0, "accents": 0,
             "recipe_groups": 0, "recipe_layers": 0,
+            "density": round(density, 2),
+            "target": target["target"], "min": target["min"],
         }
         match_plan["pruned_actions"] = match_plan.get("pruned_actions", [])
         return match_plan
@@ -261,135 +291,20 @@ def apply_selectivity(
         )
         scored.append(score_action_value(m, strategy, music_energy, idx))
 
-    pruned: list[dict[str, Any]] = []
-    survivors: list[ScoredAction] = []
-    for sa in scored:
-        if sa.tier == "skip":
-            pruned.append(_prune_record(
-                sa,
-                "below value threshold: " + ", ".join(sa.reasons),
-            ))
-        else:
-            survivors.append(sa)
+    target = compute_target_sound_count(duration_sec, density, energy_avg)
 
-    if not survivors:
-        # All SFX scored as skip — rescue the single best one if above floor.
-        best = max(scored, key=lambda s: s.value_score)
-        if best.value_score >= RESCUE_FLOOR:
-            pruned = [p for p in pruned if p["timestamp"] != best.action.get("absolute_timestamp")]
-            best.tier = "accent"
-            best.reasons.append("rescued (would otherwise be SFX-less)")
-            survivors = [best]
-            logger.warning(
-                "Selectivity: every SFX scored as skip — rescued strongest "
-                "(value=%.2f, type=%s).",
-                best.value_score, best.action.get("action_type"),
-            )
+    # Recipe groups already occupy sound slots — discount them from the target
+    # used to fill the non-recipe SFX.
+    fill_target = dict(target)
+    fill_target["target"] = max(0, target["target"] - recipe_group_count)
+    fill_target["min"] = max(0, target["min"] - recipe_group_count)
+    fill_target["max"] = max(fill_target["min"], target["max"] - recipe_group_count)
 
-    max_count = int(
-        ((strategy.get("global_constraints") or {}).get("max_sfx_count") or 8),
+    kept_scored, pruned_scored = fill_to_target(
+        scored, fill_target, min_gap_sec=MIN_GAP_SEC,
     )
-    # Recipe groups are always-kept; they count as 1 toward the cap each, so
-    # non-recipe survivors share what's left.
-    non_recipe_cap = max(0, max_count - recipe_group_count)
-    if len(survivors) > non_recipe_cap:
-        survivors.sort(
-            key=lambda sa: (sa.tier == "anchor", sa.value_score), reverse=True,
-        )
-        kept = survivors[:non_recipe_cap]
-        for sa in survivors[non_recipe_cap:]:
-            pruned.append(_prune_record(sa, f"over global cap of {max_count}"))
-        survivors = kept
 
-    survivors.sort(key=lambda sa: float(sa.action.get("absolute_timestamp") or 0.0))
-    spaced: list[ScoredAction] = []
-    for sa in survivors:
-        ts = float(sa.action.get("absolute_timestamp") or 0.0)
-        if spaced:
-            prev = spaced[-1]
-            prev_ts = float(prev.action.get("absolute_timestamp") or 0.0)
-            gap = ts - prev_ts
-            if gap < MIN_GAP_SEC:
-                if sa.value_score > prev.value_score and prev.tier != "anchor":
-                    pruned.append(_prune_record(
-                        prev, f"too close to higher-value SFX (gap {gap:.2f}s)",
-                    ))
-                    spaced[-1] = sa
-                else:
-                    pruned.append(_prune_record(
-                        sa, f"too close to previous SFX (gap {gap:.2f}s)",
-                    ))
-                continue
-        spaced.append(sa)
-
-    anchor_times = [
-        float(sa.action.get("absolute_timestamp") or 0.0)
-        for sa in spaced if sa.tier == "anchor"
-    ]
-    final: list[ScoredAction] = []
-    for sa in spaced:
-        if sa.tier == "accent":
-            ts = float(sa.action.get("absolute_timestamp") or 0.0)
-            too_close = any(
-                0 < abs(ts - at) < ANCHOR_PROTECT_SEC for at in anchor_times
-            )
-            if too_close:
-                pruned.append(_prune_record(
-                    sa, "accent too close to an anchor — protecting anchor's impact",
-                ))
-                continue
-        final.append(sa)
-
-    duration = float(
-        strategy.get("duration_sec")
-        or match_plan.get("duration_sec")
-        or 30.0
-    )
-    min_target = max(MIN_TARGET_FLOOR, int(duration / MIN_TARGET_SECONDS_PER_SFX))
-    min_target = min(min_target, max_count)
-    # Recipe groups count as 1 each toward the density target.
-    effective_density = len(final) + recipe_group_count
-
-    if effective_density < min_target:
-        rescuable = sorted(
-            [
-                sa for sa in scored
-                if sa.tier == "skip" and sa.value_score >= MIN_TARGET_RESCUE_FLOOR_SCORE
-            ],
-            key=lambda sa: sa.value_score,
-            reverse=True,
-        )
-        needed = min_target - effective_density
-        for sa in rescuable:
-            if needed <= 0:
-                break
-            ts = float(sa.action.get("absolute_timestamp") or 0.0)
-            if not all(
-                abs(ts - float(f.action.get("absolute_timestamp") or 0.0)) >= MIN_GAP_SEC
-                for f in final
-            ):
-                continue
-            sa.tier = "accent"
-            sa.reasons.append("rescued for min density")
-            final.append(sa)
-            needed -= 1
-            logger.info(
-                "Rescued SFX at %.2fs (value %.2f) to meet min density",
-                ts, sa.value_score,
-            )
-        final.sort(key=lambda sa: float(sa.action.get("absolute_timestamp") or 0.0))
-
-        rescued_timestamps = {
-            float(sa.action.get("absolute_timestamp") or 0.0)
-            for sa in final if "rescued for min density" in sa.reasons
-        }
-        if rescued_timestamps:
-            pruned = [
-                p for p in pruned
-                if float(p.get("timestamp") or 0.0) not in rescued_timestamps
-            ]
-
-    for sa in final:
+    for sa in kept_scored:
         sa.action["value_score"] = round(sa.value_score, 2)
         sa.action["value_tier"] = sa.tier
         sa.action["value_reasons"] = sa.reasons
@@ -400,31 +315,39 @@ def apply_selectivity(
         m.setdefault("value_score", 1.0)
         m.setdefault("value_reasons", ["recipe layer"])
 
-    kept_matches = [sa.action for sa in final] + recipe_sfx
+    kept_matches = [sa.action for sa in kept_scored] + recipe_sfx
     match_plan["matches"] = sorted(
         kept_matches + ambient,
         key=lambda m: float(m.get("absolute_timestamp") or 0.0),
     )
+    pruned_records = [
+        _prune_record(sa, "below density target: " + ", ".join(sa.reasons))
+        for sa in pruned_scored
+    ]
     existing_pruned = list(match_plan.get("pruned_actions") or [])
-    match_plan["pruned_actions"] = existing_pruned + pruned
+    match_plan["pruned_actions"] = existing_pruned + pruned_records
     match_plan["selectivity_stats"] = {
         "input_sfx": len(sfx_all),
         "kept_sfx": len(kept_matches),
-        "pruned_sfx": len(pruned),
+        "pruned_sfx": len(pruned_scored),
         "recipe_groups": recipe_group_count,
         "recipe_layers": len(recipe_sfx),
-        "anchors": sum(1 for sa in final if sa.tier == "anchor") + len(recipe_sfx),
-        "accents": sum(1 for sa in final if sa.tier == "accent"),
+        "anchors": sum(1 for sa in kept_scored if sa.tier == "anchor") + len(recipe_sfx),
+        "accents": sum(1 for sa in kept_scored if sa.tier == "accent"),
+        "density": round(density, 2),
+        "target": target["target"],
+        "min": target["min"],
     }
 
     logger.info(
-        "Selectivity: %d SFX in → %d kept (%d anchors, %d accents, "
-        "%d recipe layers across %d group(s)), %d pruned",
-        len(sfx_all), len(kept_matches),
+        "Selectivity (density %.2f): %d SFX in → %d kept "
+        "(%d anchors, %d accents, %d recipe layers across %d group(s)), "
+        "%d pruned (target %d)",
+        density, len(sfx_all), len(kept_matches),
         match_plan["selectivity_stats"]["anchors"],
         match_plan["selectivity_stats"]["accents"],
         len(recipe_sfx), recipe_group_count,
-        len(pruned),
+        len(pruned_scored), target["target"],
     )
     return match_plan
 

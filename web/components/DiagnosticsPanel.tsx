@@ -133,6 +133,30 @@ export function DiagnosticsPanel({ diagnostics: d }: Props) {
             />
           </Section>
 
+          {d.verification_checked > 0 && (
+            <Section title="Verification">
+              <Row label="Sounds checked" value={String(d.verification_checked)} />
+              <Row
+                label="Dropped as wrong"
+                value={String(d.verification_dropped)}
+                warn={d.verification_dropped > 0}
+              />
+              {d.verification_dropped_detail.length > 0 && (
+                <div className="space-y-1 mt-1">
+                  {d.verification_dropped_detail.map((line, i) => (
+                    <div
+                      key={i}
+                      className="flex items-start gap-2 text-xs text-red-300"
+                    >
+                      <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span className="break-words">{line}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          )}
+
           <Section title={`Sounds (${d.sounds.length})`}>
             <div className="space-y-1 mt-1">
               {d.sounds.length === 0 && (

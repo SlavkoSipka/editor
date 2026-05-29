@@ -11,14 +11,17 @@ import {
 } from "@/lib/api";
 import { UploadZone } from "@/components/UploadZone";
 import { PresetGrid } from "@/components/PresetGrid";
+import { DensitySlider } from "@/components/DensitySlider";
 import { JobProgress, type GenerationPhase } from "@/components/JobProgress";
 import { JobResult } from "@/components/JobResult";
 import { DiagnosticsPanel } from "@/components/DiagnosticsPanel";
+import { FeedbackPanel } from "@/components/FeedbackPanel";
 import { Sparkles } from "lucide-react";
 
 export default function Home() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+  const [density, setDensity] = useState<number>(0.5);
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [phase, setPhase] = useState<GenerationPhase | "idle">("idle");
@@ -26,6 +29,7 @@ export default function Home() {
   const [activeFile, setActiveFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     getPresets()
@@ -39,6 +43,12 @@ export default function Home() {
       })
       .catch((e: Error) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    if (!selectedPreset) return;
+    const p = presets.find((x) => x.id === selectedPreset);
+    if (p) setDensity(p.density);
+  }, [selectedPreset, presets]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "failed") {
@@ -79,7 +89,7 @@ export default function Home() {
     setPhase("uploading");
 
     try {
-      const newJob = await submitJob(file, selectedPreset, (progress) => {
+      const newJob = await submitJob(file, selectedPreset, density, (progress) => {
         setUploadProgress(progress);
       });
       setUploadProgress((prev) =>
@@ -134,6 +144,21 @@ export default function Home() {
               />
             </section>
 
+            {selectedPreset && (
+              <section className="space-y-3">
+                <div className="text-sm text-neutral-500 font-medium">
+                  3 — Adjust density (optional)
+                </div>
+                <DensitySlider
+                  value={density}
+                  presetDefault={
+                    presets.find((p) => p.id === selectedPreset)?.density ?? 0.5
+                  }
+                  onChange={setDensity}
+                />
+              </section>
+            )}
+
             <section>
               <button
                 type="button"
@@ -157,12 +182,16 @@ export default function Home() {
               fileName={activeFile?.name}
               uploadError={phase === "failed" && !job ? error : null}
             />
-            {job && <JobResult job={job} />}
+            {job && <JobResult job={job} videoRef={videoRef} />}
 
             {job?.diagnostics &&
               (job.status === "done" || job.status === "failed") && (
                 <DiagnosticsPanel diagnostics={job.diagnostics} />
               )}
+
+            {job?.status === "done" && job.diagnostics && (
+              <FeedbackPanel job={job} density={density} videoRef={videoRef} />
+            )}
 
             {(phase === "done" || phase === "failed") && (
               <button

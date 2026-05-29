@@ -129,6 +129,15 @@ def _collect_match_plan_diag(diag: JobDiagnostics, match_plan: dict[str, Any]) -
         if music:
             diag.music_found = True
             diag.music_name = music.get("sound_name")
+
+        vstats = match_plan.get("verification_stats") or {}
+        diag.verification_checked = int(vstats.get("checked", 0) or 0)
+        diag.verification_dropped = int(vstats.get("dropped", 0) or 0)
+        diag.verification_dropped_detail = [
+            f"{d.get('sound_name', '?')} @ "
+            f"{float(d.get('timestamp') or 0.0):.1f}s — {d.get('reason', '')}"
+            for d in match_plan.get("verification_dropped") or []
+        ]
     except Exception as exc:
         diag.warnings.append(f"diag match-plan failed: {exc}")
 
@@ -204,7 +213,13 @@ def _safe_update_diag(job_id: str, diag: JobDiagnostics) -> None:
         logger.warning("Failed to attach diagnostics to job %s: %s", job_id, exc)
 
 
-def run_pipeline(job_id: str, video_path: Path, preset: str, base_url: str) -> None:
+def run_pipeline(
+    job_id: str,
+    video_path: Path,
+    preset: str,
+    base_url: str,
+    density: float | None = None,
+) -> None:
     """Run the full pipeline in a background thread."""
     diag = JobDiagnostics(storage_mode=STORAGE_MODE)
     work_dir: Path | None = None
@@ -223,7 +238,9 @@ def run_pipeline(job_id: str, video_path: Path, preset: str, base_url: str) -> N
 
         _add_step(job_id, "Matching SFX from library")
         qdrant = get_qdrant_client()
-        match_plan = match_analysis(analysis, qdrant, preset_name=preset)
+        match_plan = match_analysis(
+            analysis, qdrant, preset_name=preset, density=density,
+        )
         _collect_match_plan_diag(diag, match_plan)
         _safe_update_diag(job_id, diag)
         _update_job(job_id, progress_pct=65)

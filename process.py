@@ -130,6 +130,17 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print value scores and reasons for every SFX (kept and pruned).",
     )
+    parser.add_argument(
+        "--density",
+        type=float,
+        default=None,
+        help="Override sound density 0.0-1.0 (default: the preset's density).",
+    )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip the Gemini match-verification pass (keeps all matched sounds).",
+    )
     return parser.parse_args()
 
 
@@ -245,7 +256,10 @@ def main() -> int:
         current_step = "[4/7] Matching SFX from library"
         t0 = _step_start(4, "Matching SFX from library...")
         client = get_qdrant_client()
-        match_plan = match_analysis(analysis, client, preset_name=args.preset)
+        match_plan = match_analysis(
+            analysis, client, preset_name=args.preset, density=args.density,
+            verify=not args.no_verify,
+        )
         sfx_count = sum(1 for m in match_plan["matches"] if m["layer"] == "sfx")
         ambient_count = sum(
             1 for m in match_plan["matches"] if m["layer"] == "ambient"
@@ -275,6 +289,23 @@ def main() -> int:
                     f"{float(r.get('anchor_timestamp') or 0):.1f}s — "
                     f"{r.get('recipe_name', '?')} "
                     f"({int(r.get('layer_count') or 0)} layers)"
+                )
+
+        vstats = (match_plan.get("match_stats") or {}).get("verification") or {}
+        if vstats and vstats.get("checked"):
+            print(
+                f"     Verification: checked {vstats.get('checked', 0)}, "
+                f"dropped {vstats.get('dropped', 0)} wrong"
+                + (
+                    f", re-added {vstats.get('re_added', 0)}"
+                    if vstats.get("re_added") else ""
+                )
+            )
+            for d in match_plan.get("verification_dropped") or []:
+                print(
+                    f"       \u2717 {str(d.get('sound_name', '?'))} @ "
+                    f"{float(d.get('timestamp') or 0):.1f}s "
+                    f"({d.get('action_type', '?')}) — {d.get('reason', '')}"
                 )
 
         sel = match_plan.get("selectivity_stats") or {}

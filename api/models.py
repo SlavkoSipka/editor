@@ -60,6 +60,10 @@ class JobDiagnostics(BaseModel):
     speech_regions: int = 0
     speech_coverage_pct: float = 0.0
 
+    verification_checked: int = 0
+    verification_dropped: int = 0
+    verification_dropped_detail: list[str] = Field(default_factory=list)
+
     sounds: list[SoundDiagnostic] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -86,6 +90,7 @@ class PresetInfo(BaseModel):
     id: str
     name: str
     description: str
+    density: float = 0.5
 
 
 class HealthResponse(BaseModel):
@@ -93,3 +98,31 @@ class HealthResponse(BaseModel):
     pipeline_ready: bool
     library_loaded: bool
     qdrant_connected: bool
+
+
+class SoundFeedback(BaseModel):
+    sound_index: int
+    sound_id: Optional[str] = None
+    sound_name: Optional[str] = None
+    action_type: Optional[str] = None
+    timestamp: float
+    matched_tier: Optional[str] = None
+    match_score: Optional[float] = None
+    rating: str  # "good" | "wrong" | "unnecessary"
+
+
+class MissingSoundMark(BaseModel):
+    timestamp: float
+    note: Optional[str] = None
+
+
+class JobFeedback(BaseModel):
+    job_id: str
+    preset: str
+    density: Optional[float] = None
+    overall_rating: Optional[int] = None  # 1-5
+    density_feedback: Optional[str] = None  # "too_low" | "right" | "too_high"
+    overall_note: Optional[str] = None
+    sound_feedback: list[SoundFeedback] = Field(default_factory=list)
+    missing_sounds: list[MissingSoundMark] = Field(default_factory=list)
+    submitted_at: Optional[str] = None

@@ -16,6 +16,8 @@ class Preset:
     music_mood_preference: str = "neutral"
     reverb_amount: float = 0.0
     rerank_strength: float = 0.5
+    # Sound density: 0.0 = minimal/sparse SFX, 1.0 = busy/packed.
+    density: float = 0.5
     # Tier routing — empty lists mean "no filter" (search the global pool).
     primary_tiers: list[str] = field(default_factory=list)
     fallback_tiers: list[str] = field(default_factory=list)
@@ -39,6 +41,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="dramatic",
         reverb_amount=0.4,
         rerank_strength=0.6,
+        density=0.40,
         primary_tiers=["cinematic", "foley"],
         fallback_tiers=["ugc"],
     ),
@@ -57,6 +60,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="energetic",
         reverb_amount=0.15,
         rerank_strength=0.6,
+        density=0.75,
         primary_tiers=["ugc", "cinematic"],
         fallback_tiers=["foley"],
     ),
@@ -75,6 +79,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="mysterious",
         reverb_amount=0.6,
         rerank_strength=0.5,
+        density=0.35,
         primary_tiers=["cinematic", "ambient"],
         fallback_tiers=["foley"],
     ),
@@ -93,6 +98,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="playful",
         reverb_amount=0.1,
         rerank_strength=0.6,
+        density=0.70,
         primary_tiers=["ugc"],
         fallback_tiers=["foley"],
     ),
@@ -111,6 +117,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="luxury",
         reverb_amount=0.25,
         rerank_strength=0.5,
+        density=0.30,
         primary_tiers=["cinematic"],
         fallback_tiers=["foley", "ugc"],
     ),
@@ -126,6 +133,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="energetic",
         reverb_amount=0.1,
         rerank_strength=0.7,
+        density=0.85,
         primary_tiers=["ugc"],
         fallback_tiers=["cinematic"],
     ),
@@ -141,6 +149,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="playful",
         reverb_amount=0.15,
         rerank_strength=0.6,
+        density=0.50,
         primary_tiers=["ugc"],
         fallback_tiers=["foley"],
     ),
@@ -156,6 +165,7 @@ PRESETS: dict[str, Preset] = {
         music_mood_preference="energetic",
         reverb_amount=0.2,
         rerank_strength=0.7,
+        density=0.70,
         primary_tiers=["ugc", "cinematic"],
         fallback_tiers=["foley"],
     ),

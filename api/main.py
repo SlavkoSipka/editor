@@ -15,8 +15,9 @@ from src.library.vector_store import get_qdrant_client
 from src.presets import PRESETS
 from src.utils.ffmpeg_check import check_ffmpeg
 
+from api.feedback_store import aggregate_feedback, load_all_feedback, save_feedback
 from api.jobs import create_job, get_job, list_jobs, run_pipeline
-from api.models import HealthResponse, JobInfo, JobStatus, PresetInfo
+from api.models import HealthResponse, JobFeedback, JobInfo, JobStatus, PresetInfo
 from api.storage import get_result_path, save_upload
 
 _ALLOWED_DOWNLOADS = frozenset({"final.mp4", "project.zip"})
@@ -64,7 +65,9 @@ def health() -> HealthResponse:
 @app.get("/presets", response_model=list[PresetInfo])
 def presets() -> list[PresetInfo]:
     return [
-        PresetInfo(id=k, name=p.name, description=p.description)
+        PresetInfo(
+            id=k, name=p.name, description=p.description, density=p.density,
+        )
         for k, p in PRESETS.items()
     ]
 
@@ -74,9 +77,13 @@ async def submit_job(
     request: Request,
     video: UploadFile = File(...),
     preset: str = Form(...),
+    density: float | None = Form(None),
 ) -> JobInfo:
     if preset not in PRESETS:
         raise HTTPException(status_code=400, detail=f"Unknown preset: {preset}")
+
+    if density is not None:
+        density = max(0.0, min(1.0, float(density)))
 
     contents = await video.read()
     if len(contents) > 500 * 1024 * 1024:
@@ -103,7 +110,7 @@ async def submit_job(
     base_url = str(request.base_url).rstrip("/")
     thread = threading.Thread(
         target=run_pipeline,
-        args=(job.job_id, saved_path, preset, base_url),
+        args=(job.job_id, saved_path, preset, base_url, density),
         daemon=True,
     )
     thread.start()
@@ -391,6 +398,25 @@ def debug_rebuild_music() -> dict:
             "error": str(exc),
             "trace": traceback.format_exc()[-1000:],
         }
+
+
+@app.post("/jobs/{job_id}/feedback")
+def submit_feedback(job_id: str, feedback: JobFeedback) -> dict:
+    feedback.job_id = job_id
+    save_feedback(feedback)
+    return {"ok": True}
+
+
+@app.get("/feedback/export")
+def export_feedback() -> dict:
+    """Raw feedback records (JSONL as a JSON array) for developer analysis."""
+    return {"records": load_all_feedback()}
+
+
+@app.get("/feedback/summary")
+def feedback_summary() -> dict:
+    """Aggregated patterns — the useful view for improving the system."""
+    return aggregate_feedback()
 
 
 @app.get("/jobs/{job_id}/download/{filename}")

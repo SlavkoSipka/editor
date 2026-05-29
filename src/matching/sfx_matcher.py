@@ -21,6 +21,7 @@ from src.matching.recipe_builder import build_recipe_layers
 from src.matching.recipes import moment_type_for_action
 from src.matching.selectivity import apply_selectivity
 from src.matching.timing_adjuster import snap_to_onsets
+from src.matching.verifier import research_dropped_anchors, verify_matches
 from src.preprocessing.onset_detector import detect_onsets_from_video
 from src.preprocessing.scene_detector import Scene, detect_scenes
 from src.presets import PRESETS, Preset, get_preset
@@ -698,9 +699,13 @@ def match_analysis(
     qdrant_client: QdrantClient,
     preset_name: str = "dramatic",
     scenes: list[Scene] | None = None,
+    density: float | None = None,
+    verify: bool = True,
 ) -> dict[str, Any]:
     """Resolve every Gemini-detected action and per-scene ambience to a concrete sound."""
     preset = get_preset(preset_name)
+    if density is None:
+        density = preset.density
     if scenes is None:
         video_path = Path(analysis.get("video_path", ""))
         if not video_path.is_file():
@@ -935,8 +940,21 @@ def match_analysis(
         "match_stats": stats,
     }
 
+    # Verification pass: drop concretely-wrong picks BEFORE density selection so
+    # the density fill works with verified sounds only. Fails open on any error.
+    if verify:
+        match_plan = verify_matches(match_plan, analysis)
+        match_plan = research_dropped_anchors(
+            match_plan, analysis, qdrant_client, preset_name,
+        )
+        stats["verification"] = match_plan.get("verification_stats", {})
+
     energy_curve = strategy.get("energy_curve") or []
-    match_plan = apply_selectivity(match_plan, strategy, energy_curve)
+    match_plan = apply_selectivity(
+        match_plan, strategy, energy_curve,
+        density=density,
+        duration_sec=analysis.get("duration_sec"),
+    )
     stats["selectivity"] = match_plan.get("selectivity_stats", {})
 
     return match_plan
