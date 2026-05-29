@@ -160,6 +160,7 @@ export type SoundFeedback = {
 export type JobFeedback = {
   job_id: string;
   preset: string;
+  reviewer?: string;
   density?: number;
   overall_rating?: number;
   density_feedback?: "too_low" | "right" | "too_high";

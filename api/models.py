@@ -119,6 +119,7 @@ class MissingSoundMark(BaseModel):
 class JobFeedback(BaseModel):
     job_id: str
     preset: str
+    reviewer: Optional[str] = None
     density: Optional[float] = None
     overall_rating: Optional[int] = None  # 1-5
     density_feedback: Optional[str] = None  # "too_low" | "right" | "too_high"

@@ -15,7 +15,14 @@ from src.library.vector_store import get_qdrant_client
 from src.presets import PRESETS
 from src.utils.ffmpeg_check import check_ffmpeg
 
-from api.feedback_store import aggregate_feedback, load_all_feedback, save_feedback
+from api.feedback_store import (
+    aggregate_feedback,
+    get_feedback_detail,
+    list_feedback,
+    load_all_feedback,
+    save_feedback,
+    update_status,
+)
 from api.jobs import create_job, get_job, list_jobs, run_pipeline
 from api.models import HealthResponse, JobFeedback, JobInfo, JobStatus, PresetInfo
 from api.storage import get_result_path, save_upload
@@ -403,13 +410,12 @@ def debug_rebuild_music() -> dict:
 @app.post("/jobs/{job_id}/feedback")
 def submit_feedback(job_id: str, feedback: JobFeedback) -> dict:
     feedback.job_id = job_id
-    save_feedback(feedback)
-    return {"ok": True}
+    return save_feedback(feedback)
 
 
 @app.get("/feedback/export")
 def export_feedback() -> dict:
-    """Raw feedback records (JSONL as a JSON array) for developer analysis."""
+    """Raw fallback (JSONL) records — only populated when Supabase is down."""
     return {"records": load_all_feedback()}
 
 
@@ -417,6 +423,27 @@ def export_feedback() -> dict:
 def feedback_summary() -> dict:
     """Aggregated patterns — the useful view for improving the system."""
     return aggregate_feedback()
+
+
+@app.get("/admin/feedback")
+def admin_list_feedback(
+    status: str | None = None, reviewer: str | None = None,
+) -> dict:
+    return {"items": list_feedback(status=status, reviewer=reviewer)}
+
+
+@app.get("/admin/feedback/{feedback_id}")
+def admin_feedback_detail(feedback_id: str) -> dict:
+    return get_feedback_detail(feedback_id)
+
+
+@app.post("/admin/feedback/{feedback_id}/status")
+def admin_update_status(
+    feedback_id: str,
+    status: str = Form(...),
+    dev_note: str | None = Form(None),
+) -> dict:
+    return update_status(feedback_id, status, dev_note)
 
 
 @app.get("/jobs/{job_id}/download/{filename}")

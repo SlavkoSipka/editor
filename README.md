@@ -149,6 +149,30 @@ Poll until `status` is `done`, then download `video_url` / `project_zip_url` fro
 | `R2_SYNC_FORCE` | Set `1` to re-download library + embeddings even if `manifest.json` already exists on the volume. |
 | `STORAGE_MODE` | `local` (default) keeps the full library on disk; `r2` fetches sounds on demand into a small LRU cache (use on Railway Hobby's 5 GB volume). |
 | `SOUND_CACHE_MAX_MB` | LRU cap for the on-demand sound cache (default `1500`). |
+| `SUPABASE_URL` | Optional — Supabase project URL for feedback storage. If unset, feedback falls back to a local JSONL file. |
+| `SUPABASE_SERVICE_KEY` | Optional — Supabase `service_role` secret key (server only). |
+
+### Supabase setup (one-time)
+
+Feedback (per-sound ratings, missing-sound marks, overall verdict) is stored in
+Supabase Postgres so it survives redeploys and is reusable for auth +
+subscriptions later. If `SUPABASE_*` env vars are missing, the API transparently
+falls back to a local JSONL file on the volume.
+
+1. Sign up at https://supabase.com (free) and create a new project. Save the database password.
+2. Go to **Project Settings → API** and copy:
+   - Project URL (e.g. `https://abcdefgh.supabase.co`)
+   - `anon` public key
+   - `service_role` secret key (keep this secret — server only)
+3. Open the **SQL Editor** and run the schema in [`supabase_schema.sql`](supabase_schema.sql).
+4. Add to Railway env vars:
+   - `SUPABASE_URL=https://abcdefgh.supabase.co`
+   - `SUPABASE_SERVICE_KEY=<service_role key>`
+5. Redeploy. Submit a test feedback and confirm a row appears in the Supabase **Table editor** (`job_feedback`).
+
+The admin tracking page lives at **`/admin`** on the frontend (lists all feedback,
+filter by status/reviewer, mark applied/ignored). It has **no auth yet** — protect
+it before any public launch.
 
 ## Evaluation
 

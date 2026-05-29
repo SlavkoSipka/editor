@@ -41,7 +41,7 @@ export function JobResult({ job, videoRef }: Props) {
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    } catch (err) {
+    } catch {
       window.open(url, "_blank", "noopener,noreferrer");
     } finally {
       setDownloading(null);

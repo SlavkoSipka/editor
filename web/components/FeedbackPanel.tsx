@@ -23,6 +23,7 @@ export function FeedbackPanel({ job, density, videoRef }: Props) {
     .map((s, idx) => ({ sound: s, idx }))
     .filter((x) => x.sound.layer === "sfx");
 
+  const [reviewer, setReviewer] = useState("");
   const [ratings, setRatings] = useState<Record<number, SoundRating>>({});
   const [overall, setOverall] = useState<number>(0);
   const [densityFb, setDensityFb] = useState<
@@ -63,6 +64,7 @@ export function FeedbackPanel({ job, density, videoRef }: Props) {
     const fb: JobFeedback = {
       job_id: job.job_id,
       preset: job.preset,
+      reviewer: reviewer || undefined,
       density,
       overall_rating: overall || undefined,
       density_feedback: densityFb || undefined,
@@ -109,6 +111,16 @@ export function FeedbackPanel({ job, density, videoRef }: Props) {
         Click a sound to jump to it in the video, then rate it. This feedback is
         used to improve matching.
       </p>
+
+      <div className="space-y-2">
+        <div className="text-xs text-neutral-500">Who&apos;s reviewing?</div>
+        <input
+          value={reviewer}
+          onChange={(e) => setReviewer(e.target.value)}
+          placeholder="your name"
+          className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600"
+        />
+      </div>
 
       <div className="space-y-1.5">
         {sfxSounds.map(({ sound: s, idx }) => {
